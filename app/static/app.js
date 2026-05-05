@@ -277,12 +277,13 @@ async function loadNegatives() {
     updateNegStatus();
     const grid = document.getElementById('negGrid');
     if (!negIds.length) { grid.innerHTML = ''; return; }
-    grid.innerHTML = d.assets.slice(0, 8).map(a => `
-      <div class="neg-thumb">
-        <img src="${a.thumb}" loading="lazy" onerror="this.style.opacity=0.2">
+    grid.innerHTML = d.assets.map(a => `
+      <div class="ref-thumb">
+        <a href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" title="Open in Immich">
+          <img src="${a.thumb}" loading="lazy" onerror="this.style.opacity=0.2">
+        </a>
         <button class="ref-remove" onclick="removeNegative('${a.id}')" title="Remove">✕</button>
       </div>`).join('');
-    if (negIds.length > 8) grid.innerHTML += `<div style="grid-column:1/-1;font-size:10px;color:var(--text3);text-align:center;padding:4px;">+${negIds.length - 8} more</div>`;
   } catch(e) { console.warn('loadNegatives:', e); }
 }
 

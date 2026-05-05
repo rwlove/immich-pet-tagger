@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, lastClickedId = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -69,7 +69,7 @@ function clearSearch() {
   document.getElementById('searchInput').value = '';
   document.getElementById('resultsLabel').textContent = 'Search to find photos';
   document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🔍</div><div class="empty-title">Search your Immich library</div><div class="empty-sub">Type a description above, then press Enter</div></div>';
-  selectedIds.clear(); updateSelUI();
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
 }
 
 async function selectPet(name) {
@@ -140,7 +140,7 @@ async function assignSelected() {
 async function viewTagged() {
   if (!activePet) return;
   taggedMode = true;
-  selectedIds.clear();
+  selectedIds.clear(); lastClickedId = null;
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
   grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Loading tagged photos...</div>';
@@ -155,7 +155,7 @@ async function viewTagged() {
       return;
     }
     grid.innerHTML = d.assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect('${a.id}')" title="${a.filename || a.id} · ${a.date}">
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename || a.id} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
         <div class="photo-check">✓</div>
       </div>`).join('');
@@ -208,7 +208,7 @@ async function doSearch() {
     label.textContent = `${assets.length} result${assets.length !== 1 ? 's' : ''} for "${q}"${activePet?.since || activePet?.until ? ' (date filtered)' : ''}`;
     if (!assets.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No results</div></div>'; return; }
     grid.innerHTML = assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect('${a.id}')" title="${a.filename} · ${a.date}">
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
         <div class="photo-check">✓</div>
       </div>`).join('');
@@ -223,12 +223,27 @@ async function doSearch() {
   }
 }
 
-function toggleSelect(id) {
+function toggleSelect(e, id) {
   const el = document.getElementById('th-' + id); if (!el) return;
   if (el.classList.contains('is-ref')) return;
   if (el.classList.contains('is-neg')) return;
-  if (selectedIds.has(id)) { selectedIds.delete(id); el.classList.remove('selected'); }
-  else { selectedIds.add(id); el.classList.add('selected'); }
+  if (e.shiftKey && lastClickedId && lastClickedId !== id) {
+    const thumbs = [...document.querySelectorAll('#photoGrid .photo-thumb')];
+    const fromEl = document.getElementById('th-' + lastClickedId);
+    const fromIdx = thumbs.indexOf(fromEl), toIdx = thumbs.indexOf(el);
+    if (fromIdx !== -1 && toIdx !== -1) {
+      const lo = Math.min(fromIdx, toIdx), hi = Math.max(fromIdx, toIdx);
+      for (let i = lo; i <= hi; i++) {
+        if (thumbs[i].classList.contains('is-ref') || thumbs[i].classList.contains('is-neg')) continue;
+        const tid = thumbs[i].id.slice(3);
+        selectedIds.add(tid); thumbs[i].classList.add('selected');
+      }
+    }
+  } else {
+    if (selectedIds.has(id)) { selectedIds.delete(id); el.classList.remove('selected'); }
+    else { selectedIds.add(id); el.classList.add('selected'); }
+    lastClickedId = id;
+  }
   updateSelUI();
 }
 

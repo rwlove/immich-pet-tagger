@@ -6,6 +6,7 @@ No DB access, embeddings computed from thumbnails via Immich HTTP API.
 import json
 import logging
 import os
+import random
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -181,6 +182,16 @@ def build_classifier(
                 all_labels.append(i)
             else:
                 log.warning(f"  Could not embed ref {aid} for '{name}'")
+
+    # Balance negatives to ~3x total pet refs
+    total_refs = sum(len(ids) for ids in ref_ids_per_pet.values())
+    if negative_ids:
+        target = total_refs * 3
+        if len(negative_ids) > target:
+            negative_ids = random.sample(negative_ids, target)
+            log.info(f"Subsampled negatives to {target} (3x {total_refs} refs)")
+        elif len(negative_ids) < total_refs * 2:
+            log.warning(f"{len(negative_ids)} negatives for {total_refs} refs — aim for {total_refs * 2}-{target} for best accuracy")
 
     # Embed negatives as the unknown class
     if negative_ids:

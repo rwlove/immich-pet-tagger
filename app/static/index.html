@@ -18,11 +18,7 @@
   </div>
   <div class="main">
     <div class="topbar">
-      <div class="search-wrap">
-        <span class="search-icon">⌕</span>
-        <input type="text" id="searchInput" placeholder="Search Immich… e.g. black cat on sofa" onkeydown="if(event.key==='Enter') doSearch()">
-      </div>
-      <button class="btn" onclick="doSearch()">Search</button>
+      <button class="btn" id="suggestBtn" onclick="viewSuggestions()" style="display:none">Similar</button>
       <span id="selCount" style="font-size:12px; color:var(--text3); min-width:60px;"></span>
       <button class="btn btn-primary" id="assignBtn" onclick="assignSelected()" style="display:none">Add to pet →</button>
       <button class="btn btn-danger" id="rejectBtn" onclick="rejectSelected()" style="display:none">Remove tag + mark unknown</button>
@@ -32,9 +28,9 @@
         <div class="panel-label" id="resultsLabel">Search to find photos</div>
         <div class="photo-grid" id="photoGrid">
           <div class="empty" style="grid-column:1/-1; height:300px;">
-            <div class="empty-icon">🔍</div>
-            <div class="empty-title">Search your Immich library</div>
-            <div class="empty-sub">Type a description above, then press Enter</div>
+            <div class="empty-icon">🐾</div>
+            <div class="empty-title">Find photos</div>
+            <div class="empty-sub">Click Similar to find photos matching this pet</div>
           </div>
         </div>
       </div>
@@ -84,6 +80,11 @@
       <input type="text" id="petName" placeholder="Luna" onkeydown="if(event.key==='Enter') submitAddPet()">
     </div>
     <div class="field">
+      <label>Description</label>
+      <input type="text" id="petDescription" placeholder="orange tabby cat">
+      <div class="hint">2-4 keywords for CLIP, e.g. "black labrador dog"</div>
+    </div>
+    <div class="field">
       <label>Photos since <span class="tag">optional</span></label>
       <input type="date" id="petSince">
       <div class="hint">Ignore photos taken before this date</div>
@@ -107,6 +108,11 @@
     <div class="field">
       <label>Name</label>
       <input type="text" id="editPetName" placeholder="Luna" onkeydown="if(event.key==='Enter') submitEditPet()">
+    </div>
+    <div class="field">
+      <label>Description</label>
+      <input type="text" id="editPetDescription" placeholder="orange tabby cat">
+      <div class="hint">2-4 keywords for CLIP, e.g. "black labrador dog"</div>
     </div>
     <div class="field">
       <label>Photos since <span class="tag">optional</span></label>

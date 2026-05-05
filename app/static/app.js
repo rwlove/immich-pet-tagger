@@ -41,18 +41,13 @@ function renderSidebar() {
   const el = document.getElementById('petsList');
   if (!pets.length) {
     el.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text3);text-align:center;line-height:1.6;">No pets yet.<br>Add one to get started.</div>';
-    document.getElementById('searchInput').disabled = true;
-    document.getElementById('searchInput').placeholder = 'Add a pet first…';
-    document.querySelector('.topbar .btn').disabled = true;
     document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">No pets yet</div><div class="empty-sub">Add a pet using the sidebar to get started</div></div>';
     document.getElementById('refsTitle').textContent = 'No pet selected';
+    document.getElementById('suggestBtn').style.display = 'none';
     document.getElementById('taggedBtn').style.display = 'none';
     document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Add a pet first</div></div>';
     return;
   }
-  document.getElementById('searchInput').disabled = false;
-  document.getElementById('searchInput').placeholder = 'Search Immich… e.g. black cat on sofa';
-  document.querySelector('.topbar .btn').disabled = false;
   el.innerHTML = pets.map(p => `
     <div class="pet-item ${activePet?.name === p.name ? 'active' : ''}" onclick="selectPet('${p.name}')">
       <div class="pet-avatar">${p.person_id ? `<img src="/api/person-thumb/${p.person_id}" onerror="this.parentElement.textContent='${initials(p.name)}'" alt="">` : initials(p.name)}</div>
@@ -66,9 +61,8 @@ function renderSidebar() {
 }
 
 function clearSearch() {
-  document.getElementById('searchInput').value = '';
-  document.getElementById('resultsLabel').textContent = 'Search to find photos';
-  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🔍</div><div class="empty-title">Search your Immich library</div><div class="empty-sub">Type a description above, then press Enter</div></div>';
+  document.getElementById('resultsLabel').textContent = '';
+  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">Find photos</div><div class="empty-sub">Click Similar to find photos matching this pet</div></div>';
   selectedIds.clear(); lastClickedId = null; updateSelUI();
 }
 
@@ -82,6 +76,7 @@ async function selectPet(name) {
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
+  document.getElementById('suggestBtn').style.display = activePet?.description ? '' : 'none';
   document.getElementById('taggedBtn').style.display = '';
   document.getElementById('taggedBtn').textContent = 'Tagged';
   await loadRefs(name);
@@ -131,6 +126,42 @@ async function assignSelected() {
     await refreshState();
     toast(`Added to ${activePet.name}`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------------------
+// Ref suggestions
+// ---------------------------------------------------------------------------
+
+async function viewSuggestions() {
+  if (!activePet) return;
+  taggedMode = false;
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
+  const grid = document.getElementById('photoGrid');
+  const label = document.getElementById('resultsLabel');
+  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding similar photos… this may take a moment</div>';
+  label.textContent = 'Finding similar photos…';
+  try {
+    const d = await api(`/api/pets/${encodeURIComponent(activePet.name)}/suggestions`);
+    label.textContent = `${d.assets.length} photo${d.assets.length !== 1 ? 's' : ''} similar to ${activePet.name}'s refs`;
+    if (!d.assets.length) {
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No suggestions found</div><div class="empty-sub">Add more refs or broaden the date range</div></div>';
+      return;
+    }
+    grid.innerHTML = d.assets.map(a => `
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <div class="photo-check">✓</div>
+      </div>`).join('');
+    const refSet = new Set(refsIds), negSet = new Set(negIds);
+    d.assets.forEach(a => {
+      if (refSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-ref');
+      if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
+    });
+  } catch(e) {
+    label.textContent = 'Failed to load suggestions';
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
+    toast('Suggestions error: ' + e.message, 'error');
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -186,41 +217,6 @@ async function rejectSelected() {
     document.getElementById('taggedBtn').textContent = `Tagged (${remaining})`;
     toast(`Removed ${ids.length} tag${ids.length !== 1 ? 's' : ''} and marked as unknown`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
-}
-
-// ---------------------------------------------------------------------------
-// Search
-// ---------------------------------------------------------------------------
-
-async function doSearch() {
-  const q = document.getElementById('searchInput').value.trim(); if (!q) return;
-  if (!activePet) { toast('Select a pet first to scope the search', 'error'); return; }
-  taggedMode = false;
-  const grid = document.getElementById('photoGrid'), label = document.getElementById('resultsLabel');
-  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Searching…</div>';
-  label.textContent = 'Searching…'; selectedIds.clear(); updateSelUI();
-  try {
-    let url = `/api/search?q=${encodeURIComponent(q)}&limit=60`;
-    if (activePet?.since) url += `&since=${activePet.since}`;
-    if (activePet?.until) url += `&until=${activePet.until}`;
-    const d = await api(url);
-    const assets = d.assets;
-    label.textContent = `${assets.length} result${assets.length !== 1 ? 's' : ''} for "${q}"${activePet?.since || activePet?.until ? ' (date filtered)' : ''}`;
-    if (!assets.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No results</div></div>'; return; }
-    grid.innerHTML = assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
-        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
-        <div class="photo-check">✓</div>
-      </div>`).join('');
-    const refSet = new Set(refsIds);
-    assets.forEach(a => { if (refSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-ref'); });
-    const negSet = new Set(negIds);
-    assets.forEach(a => { if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg'); });
-  } catch(e) {
-    label.textContent = 'Search failed';
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="empty-sub">${e.message}</div></div>`;
-    toast('Search error: ' + e.message, 'error');
-  }
 }
 
 function toggleSelect(e, id) {
@@ -381,7 +377,7 @@ function modalError(id, msg) { document.getElementById(id).textContent = msg; }
 function clearModalError(id) { document.getElementById(id).textContent = ''; }
 
 function openAddPet() {
-  document.getElementById('petName').value = ''; document.getElementById('petSince').value = ''; document.getElementById('petUntil').value = '';
+  document.getElementById('petName').value = ''; document.getElementById('petDescription').value = ''; document.getElementById('petSince').value = ''; document.getElementById('petUntil').value = '';
   document.getElementById('addPetModal').classList.add('open');
   setTimeout(() => document.getElementById('petName').focus(), 100);
 }
@@ -392,6 +388,8 @@ async function submitAddPet() {
   const name = document.getElementById('petName').value.trim();
   if (!name) { modalError('addPetError', 'Name cannot be empty'); return; }
   if (/[\/\\.]/.test(name)) { modalError('addPetError', 'Name cannot contain / \\ or .'); return; }
+  const description = document.getElementById('petDescription').value.trim();
+  if (!description) { modalError('addPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('petSince').value;
   const untilRaw = document.getElementById('petUntil').value;
   const sinceEl = document.getElementById('petSince');
@@ -403,7 +401,7 @@ async function submitAddPet() {
   if (untilRaw && !dateRe.test(untilRaw)) { modalError('addPetError', 'Invalid "until" date. Use YYYY-MM-DD'); return; }
   if (sinceRaw && untilRaw && sinceRaw > untilRaw) { modalError('addPetError', '"Since" must be before "until"'); return; }
   try {
-    await api('/api/pets', { method: 'POST', body: { name, since: sinceRaw || null, until: untilRaw || null } });
+    await api('/api/pets', { method: 'POST', body: { name, description, since: sinceRaw || null, until: untilRaw || null } });
     closeModal();
     await refreshState();
     toast(`Created ${name}`, 'success');
@@ -417,6 +415,7 @@ function openEditPet(name) {
   _petToEdit = name;
   const p = pets.find(p => p.name === name);
   document.getElementById('editPetName').value = p.name;
+  document.getElementById('editPetDescription').value = p.description || '';
   document.getElementById('editPetSince').value = p.since || '';
   document.getElementById('editPetUntil').value = p.until || '';
   document.getElementById('editPetModal').classList.add('open');
@@ -430,6 +429,8 @@ async function submitEditPet() {
   const name = document.getElementById('editPetName').value.trim();
   if (!name) { modalError('editPetError', 'Name cannot be empty'); return; }
   if (/[\/\\.]/.test(name)) { modalError('editPetError', 'Name cannot contain / \\ or .'); return; }
+  const description = document.getElementById('editPetDescription').value.trim();
+  if (!description) { modalError('editPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('editPetSince').value;
   const untilRaw = document.getElementById('editPetUntil').value;
   const sinceEl = document.getElementById('editPetSince');
@@ -441,7 +442,7 @@ async function submitEditPet() {
   if (untilRaw && !dateRe.test(untilRaw)) { modalError('editPetError', 'Invalid "until" date. Use YYYY-MM-DD'); return; }
   if (sinceRaw && untilRaw && sinceRaw > untilRaw) { modalError('editPetError', '"Since" must be before "until"'); return; }
   try {
-    await api(`/api/pets/${encodeURIComponent(_petToEdit)}`, { method: 'PATCH', body: { name, since: sinceRaw || null, until: untilRaw || null } });
+    await api(`/api/pets/${encodeURIComponent(_petToEdit)}`, { method: 'PATCH', body: { name, description, since: sinceRaw || null, until: untilRaw || null } });
     closeEditModal();
     const wasActive = activePet?.name === _petToEdit;
     activePet = null; clearSearch();

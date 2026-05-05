@@ -1,6 +1,7 @@
 """API routes for the enrollment UI.
 All Immich communication happens here; the browser never touches Immich directly."""
 
+import asyncio
 import json
 import logging
 import os
@@ -9,12 +10,14 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import numpy as np
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import data
 import immich as imm
+from poller import embed_asset
 
 log = logging.getLogger("api")
 
@@ -33,40 +36,23 @@ class PetCreate(BaseModel):
     name: str
     since: Optional[str] = None
     until: Optional[str] = None
+    description: str
 
 
 class PetUpdate(BaseModel):
     name: Optional[str] = None
     since: Optional[str] = None
     until: Optional[str] = None
+    description: Optional[str] = None
 
 
 class PetAssets(BaseModel):
     asset_ids: list[str]
 
 
-# ---------------------------------------------------------------------------
-# Search
-# ---------------------------------------------------------------------------
-
 @router.get("/config")
 async def get_config():
     return {"immich_external_url": IMMICH_EXTERNAL_URL}
-
-
-@router.get("/search")
-async def search_assets(q: str, limit: int = 40, since: Optional[str] = None, until: Optional[str] = None):
-    body: dict = {"query": q, "type": "IMAGE", "limit": limit}
-    if since:
-        body["takenAfter"] = since + "T00:00:00.000Z"
-    if until:
-        body["takenBefore"] = until + "T23:59:59.999Z"
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    assets = resp.json().get("assets", {}).get("items", [])
-    return {"assets": [_slim_asset(a) for a in assets]}
 
 
 def _slim_asset(a: dict) -> dict:
@@ -82,7 +68,8 @@ async def list_pets():
     config = data.load_config(DATA_DIR)
     return {"pets": [
         {"name": name, "person_id": cfg.get("person_id"), "since": cfg.get("since"),
-         "until": cfg.get("until"), "ref_count": len(data.load_pet_asset_ids(name, DATA_DIR))}
+         "until": cfg.get("until"), "description": cfg.get("description"),
+         "ref_count": len(data.load_pet_asset_ids(name, DATA_DIR))}
         for name, cfg in config.items()
     ]}
 
@@ -104,7 +91,7 @@ async def create_pet(pet: PetCreate):
         raise HTTPException(status_code=resp.status_code, detail=f"Immich error: {resp.text}")
 
     person_id = resp.json().get("id")
-    config[name] = {"person_id": person_id, "since": pet.since, "until": pet.until}
+    config[name] = {"person_id": person_id, "since": pet.since, "until": pet.until, "description": pet.description}
     data.save_config(config, DATA_DIR)
     (PETS_DIR / name).mkdir(parents=True, exist_ok=True)
     log.info(f"Created pet '{name}' with person_id={person_id}")
@@ -137,6 +124,8 @@ async def update_pet(name: str, update: PetUpdate):
         config[name]["since"] = update.since
     if "until" in update.model_fields_set:
         config[name]["until"] = update.until
+    if "description" in update.model_fields_set:
+        config[name]["description"] = update.description
     data.save_config(config, DATA_DIR)
     log.info(f"Updated pet '{name}'")
     return {"ok": True}
@@ -313,6 +302,71 @@ async def reject_tagged_assets(name: str, body: PetAssets):
     data.save_negative_ids(merged, DATA_DIR)
     log.info(f"Rejected {len(body.asset_ids)} assets for '{name}': {removed} faces removed, {len(merged)-len(existing)} added to negatives")
     return {"ok": True, "removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# Ref suggestions
+# ---------------------------------------------------------------------------
+
+@router.get("/pets/{name}/suggestions")
+async def get_suggestions(name: str, limit: int = 20):
+    from poller import build_classifier
+    config = data.load_config(DATA_DIR)
+    if name not in config:
+        raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
+
+    pet_cfg = config[name]
+    description = pet_cfg.get("description", "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="no_description")
+
+    ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
+    ref_set = set(ref_ids)
+    neg_ids = set(data.load_negative_ids(DATA_DIR))
+
+    # Stage 1: smart search to get a relevant candidate pool
+    body: dict = {"query": description, "type": "IMAGE", "limit": 60}
+    if pet_cfg.get("since"):
+        body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+    if pet_cfg.get("until"):
+        body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    all_items = resp.json().get("assets", {}).get("items", [])
+    candidates = [a for a in all_items if a["id"] not in ref_set and a["id"] not in neg_ids]
+    if not candidates:
+        return {"assets": []}
+
+    # Stage 2: classify candidates with the same classifier as the poller
+    all_pet_names = list(config.keys())
+    all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    pet_names = [n for n in all_pet_names if all_ref_ids.get(n)]
+    ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}
+    negative_ids = data.load_negative_ids(DATA_DIR)
+
+    def compute():
+        result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
+        if result is None:
+            return candidates[:limit]
+        names, clf, scaler = result
+        if name not in names:
+            return candidates[:limit]
+        pet_idx = names.index(name)
+        scored = []
+        for a in candidates:
+            vec = embed_asset(a["id"])
+            if vec is not None:
+                v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
+                pet_prob = float(clf.predict_proba(scaler.transform(v))[0][pet_idx])
+                scored.append((pet_prob, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [a for _, a in scored[:limit]]
+
+    results = await asyncio.to_thread(compute)
+    return {"assets": [_slim_asset(a) for a in results]}
 
 
 # ---------------------------------------------------------------------------

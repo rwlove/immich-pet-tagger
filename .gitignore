@@ -5,3 +5,4 @@ __pycache__/
 .env
 *.log
 docker-compose.override.yml
+TODO.md

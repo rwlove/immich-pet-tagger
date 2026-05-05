@@ -215,7 +215,7 @@ async function rejectSelected() {
     const remaining = document.querySelectorAll('#photoGrid .photo-thumb').length;
     document.getElementById('resultsLabel').textContent = `${remaining} photo${remaining !== 1 ? 's' : ''} tagged as ${activePet.name} in Immich`;
     document.getElementById('taggedBtn').textContent = `Tagged (${remaining})`;
-    toast(`Removed ${ids.length} tag${ids.length !== 1 ? 's' : ''} and marked as unknown`, 'success');
+    toast(`Removed ${ids.length} tag${ids.length !== 1 ? 's' : ''} and added to "not my pets"`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
@@ -295,7 +295,7 @@ async function addSelectedAsNegatives() {
     document.querySelectorAll('.photo-thumb.selected').forEach(el => { el.classList.remove('selected'); el.classList.add('is-neg'); });
     selectedIds.clear(); updateSelUI();
     await loadNegatives();
-    toast('Marked as unknown', 'success');
+    toast('Added to "not my pets"', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
@@ -305,7 +305,7 @@ async function removeNegative(id) {
     negIds = negIds.filter(i => i !== id);
     await loadNegatives();
     document.getElementById('th-' + id)?.classList.remove('is-neg');
-    toast('Removed from negatives');
+    toast('Removed from "not my pets"');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 

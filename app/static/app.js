@@ -486,24 +486,27 @@ function openDeletePet(name) {
   const p = pets.find(p => p.name === name);
   const refs = p ? p.ref_count : 0;
   document.getElementById('deleteWarningText').textContent =
-    `"${name}" will be permanently removed from Immich and all ${refs} reference photo${refs !== 1 ? 's' : ''} will be untagged.`;
+    `"Delete from Immich too" removes the person and untags all ${refs} photo${refs !== 1 ? 's' : ''} in Immich permanently. Your photos are not deleted.`;
+  document.getElementById('deleteLocalOnlyText').textContent =
+    `"Remove from tool only" keeps ${name} in Immich with all tagged photos intact, but stops auto-tagging new photos. Your photos are not deleted. You can re-import it later.`;
   document.getElementById('deletePetModal').classList.add('open');
 }
 function closeDeleteModal() { document.getElementById('deletePetModal').classList.remove('open'); _petToDelete = null; }
 
-async function confirmDeletePet() {
+async function confirmDeletePet(localOnly) {
   if (!_petToDelete) return;
   const name = _petToDelete;
   closeDeleteModal();
   try {
-    await api(`/api/pets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const url = `/api/pets/${encodeURIComponent(name)}` + (localOnly ? '?local_only=true' : '');
+    await api(url, { method: 'DELETE' });
     if (activePet?.name === name) {
       activePet = null;
       document.getElementById('refsTitle').textContent = 'No pet selected';
       document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Select a pet</div></div>';
     }
     await refreshState();
-    toast(`Deleted ${name}`, 'success');
+    toast(localOnly ? `Removed ${name} from tool` : `Deleted ${name}`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 

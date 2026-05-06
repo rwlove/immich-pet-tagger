@@ -64,6 +64,7 @@ body { font-family: 'SF Pro Display','Segoe UI',system-ui,sans-serif; background
 .modal-backdrop.open { opacity: 1; pointer-events: all; }
 .modal { background: var(--bg2); border: 0.5px solid var(--border2); border-radius: var(--radius); padding: 24px; width: 340px; transform: translateY(8px); transition: transform 0.15s; }
 .modal-wide { width: 480px; }
+.modal-lg { width: 480px; }
 .modal-backdrop.open .modal { transform: translateY(0); }
 .people-grid { display: grid; grid-template-columns: repeat(4, 1fr); max-height: 320px; overflow-y: auto; margin-bottom: 4px; align-content: start; }
 .person-card { display: flex; flex-direction: column; align-items: center; gap: 5px; border-radius: var(--radius-sm); cursor: pointer; border: 1.5px solid transparent; transition: all 0.15s; }

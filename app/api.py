@@ -132,13 +132,13 @@ async def update_pet(name: str, update: PetUpdate):
 
 
 @router.delete("/pets/{name}")
-async def delete_pet(name: str):
+async def delete_pet(name: str, local_only: bool = False):
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
     person_id = config[name].get("person_id")
 
-    if person_id:
+    if not local_only and person_id:
         async with httpx.AsyncClient(timeout=30) as client:
             for ref in data.load_pet_refs(name, DATA_DIR):
                 face_id = ref.get("face_id")
@@ -157,7 +157,7 @@ async def delete_pet(name: str):
     pet_dir = PETS_DIR / name
     if pet_dir.exists():
         shutil.rmtree(pet_dir)
-    log.info(f"Deleted pet '{name}'")
+    log.info(f"Deleted pet '{name}' (local_only={local_only})")
     return {"ok": True}
 
 

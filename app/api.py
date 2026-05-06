@@ -357,6 +357,9 @@ async def get_suggestions(name: str, limit: int = 20):
     if not candidates:
         return {"assets": []}
 
+    if not ref_ids:
+        return {"assets": [_slim_asset(a) for a in candidates[:limit]]}
+
     # Stage 2: classify candidates with the same classifier as the poller
     all_pet_names = list(config.keys())
     all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}

@@ -1,4 +1,7 @@
-data/
+data/*
+!data/pets/
+data/pets/*
+!data/pets/.gitkeep
 __pycache__/
 *.pyc
 *.pyo

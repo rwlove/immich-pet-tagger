@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, lastClickedId = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, lastClickedId = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -73,7 +73,7 @@ async function selectPet(name) {
     const ok = confirm(`You have ${selectedIds.size} selected photo${selectedIds.size !== 1 ? 's' : ''} not yet assigned. Switch anyway?`);
     if (!ok) return;
   }
-  taggedMode = false;
+  taggedMode = false; negCandidateMode = false;
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
@@ -249,7 +249,7 @@ function toggleSelect(e, id) {
 function updateSelUI() {
   const n = selectedIds.size;
   document.getElementById('selCount').textContent = n ? `${n} selected` : '';
-  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode) ? '' : 'none';
+  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode && !negCandidateMode) ? '' : 'none';
   document.getElementById('addNegBtn').style.display = (n && !taggedMode) ? '' : 'none';
   document.getElementById('rejectBtn').style.display = (n && taggedMode) ? '' : 'none';
 }
@@ -301,6 +301,36 @@ async function addSelectedAsNegatives() {
     await loadNegatives();
     toast('Added to "not my pets"', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function viewNegCandidates() {
+  negCandidateMode = true; taggedMode = false;
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
+  const grid = document.getElementById('photoGrid');
+  const label = document.getElementById('resultsLabel');
+  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding candidates across all pets… this may take a moment</div>';
+  label.textContent = 'Finding candidates…';
+  try {
+    const d = await api('/api/suggestions/negatives');
+    label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
+    if (!d.assets.length) {
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No candidates found</div><div class="empty-sub">Add more refs or descriptions to your pets</div></div>';
+      return;
+    }
+    grid.innerHTML = d.assets.map(a => `
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <div class="photo-check">✓</div>
+      </div>`).join('');
+    const negSet = new Set(negIds);
+    d.assets.forEach(a => {
+      if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
+    });
+  } catch(e) {
+    label.textContent = 'Failed to load candidates';
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 async function clearAllRefs() {

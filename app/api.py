@@ -386,6 +386,67 @@ async def get_suggestions(name: str, limit: int = 20):
     return {"assets": [_slim_asset(a) for a in results]}
 
 
+@router.get("/suggestions/negatives")
+async def get_neg_candidates(limit: int = 60):
+    from poller import build_classifier
+    config = data.load_config(DATA_DIR)
+
+    all_ref_ids: set[str] = set()
+    for name in config:
+        all_ref_ids.update(data.load_pet_asset_ids(name, DATA_DIR))
+    neg_ids = set(data.load_negative_ids(DATA_DIR))
+    exclude = all_ref_ids | neg_ids
+
+    seen: set[str] = set()
+    candidates = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for name, pet_cfg in config.items():
+            description = pet_cfg.get("description", "").strip()
+            if not description:
+                continue
+            body: dict = {"query": description, "type": "IMAGE", "limit": 100}
+            if pet_cfg.get("since"):
+                body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+            if pet_cfg.get("until"):
+                body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+            resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+            if resp.status_code != 200:
+                continue
+            for a in resp.json().get("assets", {}).get("items", []):
+                aid = a.get("id")
+                if aid and aid not in exclude and aid not in seen:
+                    seen.add(aid)
+                    candidates.append(a)
+
+    if not candidates:
+        return {"assets": []}
+
+    all_pet_names = list(config.keys())
+    ref_ids_per_pet = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    pet_names = [n for n in all_pet_names if ref_ids_per_pet.get(n)]
+    negative_ids = data.load_negative_ids(DATA_DIR)
+
+    def compute():
+        result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
+        if result is None:
+            return candidates[:limit]
+        names, clf, scaler = result
+        unknown_idx = names.index("unknown") if "unknown" in names else -1
+        scored = []
+        for a in candidates:
+            vec = embed_asset(a["id"])
+            if vec is not None:
+                v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
+                probs = clf.predict_proba(scaler.transform(v))[0]
+                pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
+                scored.append((pet_prob, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [a for _, a in scored[:limit]]
+
+    results = await asyncio.to_thread(compute)
+    return {"assets": [_slim_asset(a) for a in results]}
+
+
 # ---------------------------------------------------------------------------
 # Scan timestamp
 # ---------------------------------------------------------------------------
@@ -442,7 +503,7 @@ async def import_pet(body: PetImport):
                     continue
                 faces_resp = await client.get(f"{imm.IMMICH_URL}/api/faces", headers=imm.headers(), params={"id": aid})
                 if faces_resp.status_code == 200:
-                    named = {f["person"]["id"] for f in faces_resp.json() if f.get("person", {}).get("id")}
+                    named = {f["person"]["id"] for f in faces_resp.json() if f and (f.get("person") or {}).get("id")}
                     if len(named) == 1:
                         candidates.append(aid)
 

@@ -22,6 +22,7 @@ services:
       # Linux/macOS:
       #   - /home/yourname/immich-pet-tagger/data:/data
       - ./data:/data
+      - ./app:/app
     networks:
       - immich_default           # Must match the network name in your Immich compose file
 

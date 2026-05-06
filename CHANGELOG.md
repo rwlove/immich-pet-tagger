@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.3.0
+
+### Features
+- **Import from Immich**: import a pet directly from an existing Immich person. The tool fetches up to 20 evenly distributed single-pet photos as refs automatically, skipping photos where multiple named people appear.
+- **Find candidates for "not my pets"**: new button searches across all pets simultaneously, merges results, scores them by pet-likeness using the classifier, and shows the top 60 in the main grid for bulk review.
+- **Tool-only delete**: when deleting a pet, a third option lets you remove it from the tool only (keeping the Immich person and all tagged photos intact). Assets are never deleted in either case.
+- **Clear all refs / Clear all negatives**: bulk-clear buttons with confirmation, local only, no Immich changes.
+
+### Fixes
+- "Find similar photos" now skips the CLIP classifier stage when the pet has no refs, returning text search results immediately instead of waiting for model inference.
+- Auto-select newly created pet after adding it.
+- Stay on the edited pet after saving edits (was jumping to the first pet).
+- Import no longer crashes on photos where Immich returns a null person in the faces list.
+
+### Internal
+- `app/` directory volume-mounted in docker-compose: Python, HTML, CSS, and JS changes apply after `docker compose restart` with no rebuild needed.
+
+---
+
 ## v0.2.0
 
 ### Features

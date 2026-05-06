@@ -132,13 +132,13 @@ async def update_pet(name: str, update: PetUpdate):
 
 
 @router.delete("/pets/{name}")
-async def delete_pet(name: str):
+async def delete_pet(name: str, local_only: bool = False):
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
     person_id = config[name].get("person_id")
 
-    if person_id:
+    if not local_only and person_id:
         async with httpx.AsyncClient(timeout=30) as client:
             for ref in data.load_pet_refs(name, DATA_DIR):
                 face_id = ref.get("face_id")
@@ -157,7 +157,7 @@ async def delete_pet(name: str):
     pet_dir = PETS_DIR / name
     if pet_dir.exists():
         shutil.rmtree(pet_dir)
-    log.info(f"Deleted pet '{name}'")
+    log.info(f"Deleted pet '{name}' (local_only={local_only})")
     return {"ok": True}
 
 
@@ -178,6 +178,23 @@ async def add_negatives(body: PetAssets):
     data.save_negative_ids(merged, DATA_DIR)
     log.info(f"Negatives: {len(merged)} total (+{len(set(body.asset_ids) - existing)} new)")
     return {"ok": True, "count": len(merged)}
+
+
+@router.delete("/pets/{name}/refs")
+async def clear_pet_refs(name: str):
+    config = data.load_config(DATA_DIR)
+    if name not in config:
+        raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
+    data.save_pet_refs(name, [], DATA_DIR)
+    log.info(f"Cleared all refs for pet '{name}' (local only)")
+    return {"ok": True}
+
+
+@router.delete("/negatives/all")
+async def clear_all_negatives():
+    data.save_negative_ids([], DATA_DIR)
+    log.info("Cleared all negatives (local only)")
+    return {"ok": True}
 
 
 @router.delete("/negatives/{asset_id}")
@@ -340,6 +357,9 @@ async def get_suggestions(name: str, limit: int = 20):
     if not candidates:
         return {"assets": []}
 
+    if not ref_ids:
+        return {"assets": [_slim_asset(a) for a in candidates[:limit]]}
+
     # Stage 2: classify candidates with the same classifier as the poller
     all_pet_names = list(config.keys())
     all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
@@ -369,6 +389,67 @@ async def get_suggestions(name: str, limit: int = 20):
     return {"assets": [_slim_asset(a) for a in results]}
 
 
+@router.get("/suggestions/negatives")
+async def get_neg_candidates(limit: int = 60):
+    from poller import build_classifier
+    config = data.load_config(DATA_DIR)
+
+    all_ref_ids: set[str] = set()
+    for name in config:
+        all_ref_ids.update(data.load_pet_asset_ids(name, DATA_DIR))
+    neg_ids = set(data.load_negative_ids(DATA_DIR))
+    exclude = all_ref_ids | neg_ids
+
+    seen: set[str] = set()
+    candidates = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for name, pet_cfg in config.items():
+            description = pet_cfg.get("description", "").strip()
+            if not description:
+                continue
+            body: dict = {"query": description, "type": "IMAGE", "limit": 100}
+            if pet_cfg.get("since"):
+                body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+            if pet_cfg.get("until"):
+                body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+            resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+            if resp.status_code != 200:
+                continue
+            for a in resp.json().get("assets", {}).get("items", []):
+                aid = a.get("id")
+                if aid and aid not in exclude and aid not in seen:
+                    seen.add(aid)
+                    candidates.append(a)
+
+    if not candidates:
+        return {"assets": []}
+
+    all_pet_names = list(config.keys())
+    ref_ids_per_pet = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    pet_names = [n for n in all_pet_names if ref_ids_per_pet.get(n)]
+    negative_ids = data.load_negative_ids(DATA_DIR)
+
+    def compute():
+        result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
+        if result is None:
+            return candidates[:limit]
+        names, clf, scaler = result
+        unknown_idx = names.index("unknown") if "unknown" in names else -1
+        scored = []
+        for a in candidates:
+            vec = embed_asset(a["id"])
+            if vec is not None:
+                v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
+                probs = clf.predict_proba(scaler.transform(v))[0]
+                pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
+                scored.append((pet_prob, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [a for _, a in scored[:limit]]
+
+    results = await asyncio.to_thread(compute)
+    return {"assets": [_slim_asset(a) for a in results]}
+
+
 # ---------------------------------------------------------------------------
 # Scan timestamp
 # ---------------------------------------------------------------------------
@@ -385,6 +466,61 @@ async def get_timestamp():
     return {"timestamp": val}
 
 
+class PetImport(BaseModel):
+    person_id: str
+    name: str
+    description: str
+    since: Optional[str] = None
+    until: Optional[str] = None
+
+
+@router.post("/pets/import")
+async def import_pet(body: PetImport):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    if any(c in name for c in r'/\.'):
+        raise HTTPException(status_code=400, detail="Pet name cannot contain /, \\, or .")
+    config = data.load_config(DATA_DIR)
+    if name.lower() in {k.lower() for k in config}:
+        raise HTTPException(status_code=409, detail=f"Pet '{name}' already exists")
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        check = await client.get(f"{imm.IMMICH_URL}/api/people/{body.person_id}", headers=imm.headers())
+    if check.status_code != 200:
+        raise HTTPException(status_code=404, detail="Person not found in Immich")
+
+    candidates = []
+    async with httpx.AsyncClient(timeout=60) as client:
+        search = await client.post(
+            f"{imm.IMMICH_URL}/api/search/metadata",
+            headers={**imm.headers(), "Content-Type": "application/json"},
+            json={"personIds": [body.person_id], "size": 200},
+        )
+        if search.status_code == 200:
+            block = search.json().get("assets", {})
+            items = block.get("items", []) if isinstance(block, dict) else []
+            for a in items:
+                aid = a.get("id")
+                if not aid:
+                    continue
+                faces_resp = await client.get(f"{imm.IMMICH_URL}/api/faces", headers=imm.headers(), params={"id": aid})
+                if faces_resp.status_code == 200:
+                    named = {f["person"]["id"] for f in faces_resp.json() if f and (f.get("person") or {}).get("id")}
+                    if len(named) == 1:
+                        candidates.append(aid)
+
+    n = min(len(candidates), 20)
+    assets = [{"asset_id": candidates[int(i * len(candidates) / n)], "face_id": None} for i in range(n)]
+
+    (PETS_DIR / name).mkdir(parents=True, exist_ok=True)
+    data.save_pet_refs(name, assets, DATA_DIR)
+    config[name] = {"person_id": body.person_id, "description": body.description, "since": body.since, "until": body.until}
+    data.save_config(config, DATA_DIR)
+    log.info(f"Imported pet '{name}' from person_id={body.person_id} with {len(assets)} refs")
+    return {"name": name, "person_id": body.person_id, "ref_count": len(assets)}
+
+
 class TimestampBody(BaseModel):
     date: str
 
@@ -398,6 +534,21 @@ async def set_timestamp(body: TimestampBody):
     data.save_last_timestamp(ts, DATA_DIR)
     log.info(f"Scan timestamp reset to {ts}")
     return {"timestamp": ts}
+
+
+# ---------------------------------------------------------------------------
+# Immich people list (for import)
+# ---------------------------------------------------------------------------
+
+@router.get("/immich-people")
+async def list_immich_people():
+    async with httpx.AsyncClient(timeout=15) as client:
+        resp = await client.get(f"{imm.IMMICH_URL}/api/people", params={"withHidden": "false"}, headers=imm.headers())
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail="Failed to fetch people from Immich")
+    body = resp.json()
+    people = [{"id": p["id"], "name": p.get("name", "")} for p in body.get("people", []) if p.get("name")]
+    return {"people": people}
 
 
 # ---------------------------------------------------------------------------

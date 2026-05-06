@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, lastClickedId = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, lastClickedId = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -45,6 +45,7 @@ function renderSidebar() {
     document.getElementById('refsTitle').textContent = 'No pet selected';
     document.getElementById('suggestSection').style.display = 'none';
     document.getElementById('taggedBtn').style.display = 'none';
+    document.getElementById('clearRefsBtn').style.display = 'none';
     document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Add a pet first</div></div>';
     return;
   }
@@ -72,13 +73,14 @@ async function selectPet(name) {
     const ok = confirm(`You have ${selectedIds.size} selected photo${selectedIds.size !== 1 ? 's' : ''} not yet assigned. Switch anyway?`);
     if (!ok) return;
   }
-  taggedMode = false;
+  taggedMode = false; negCandidateMode = false;
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
   document.getElementById('suggestSection').style.display = '';
   document.getElementById('taggedBtn').style.display = '';
   document.getElementById('taggedBtn').textContent = 'Tagged';
+  document.getElementById('clearRefsBtn').style.display = '';
   await loadRefs(name);
   await loadNegatives();
 }
@@ -247,7 +249,7 @@ function toggleSelect(e, id) {
 function updateSelUI() {
   const n = selectedIds.size;
   document.getElementById('selCount').textContent = n ? `${n} selected` : '';
-  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode) ? '' : 'none';
+  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode && !negCandidateMode) ? '' : 'none';
   document.getElementById('addNegBtn').style.display = (n && !taggedMode) ? '' : 'none';
   document.getElementById('rejectBtn').style.display = (n && taggedMode) ? '' : 'none';
 }
@@ -276,6 +278,7 @@ async function loadNegatives() {
     const d = await api('/api/negatives');
     negIds = d.assets.map(a => a.id);
     updateNegStatus();
+    document.getElementById('clearNegsBtn').style.display = negIds.length ? '' : 'none';
     const grid = document.getElementById('negGrid');
     if (!negIds.length) { grid.innerHTML = ''; return; }
     grid.innerHTML = d.assets.map(a => `
@@ -297,6 +300,58 @@ async function addSelectedAsNegatives() {
     selectedIds.clear(); updateSelUI();
     await loadNegatives();
     toast('Added to "not my pets"', 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function viewNegCandidates() {
+  negCandidateMode = true; taggedMode = false;
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
+  const grid = document.getElementById('photoGrid');
+  const label = document.getElementById('resultsLabel');
+  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding candidates across all pets… this may take a moment</div>';
+  label.textContent = 'Finding candidates…';
+  try {
+    const d = await api('/api/suggestions/negatives');
+    label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
+    if (!d.assets.length) {
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No candidates found</div><div class="empty-sub">Add more refs or descriptions to your pets</div></div>';
+      return;
+    }
+    grid.innerHTML = d.assets.map(a => `
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <div class="photo-check">✓</div>
+      </div>`).join('');
+    const negSet = new Set(negIds);
+    d.assets.forEach(a => {
+      if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
+    });
+  } catch(e) {
+    label.textContent = 'Failed to load candidates';
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function clearAllRefs() {
+  if (!activePet) return;
+  if (!confirm(`Remove all reference photos for ${activePet.name} from this tool? This will not affect Immich.`)) return;
+  try {
+    await api(`/api/pets/${encodeURIComponent(activePet.name)}/refs`, { method: 'DELETE' });
+    refsIds = [];
+    await loadRefs(activePet.name);
+    await refreshState();
+    toast('All refs cleared', 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function clearAllNegatives() {
+  if (!confirm(`Remove all "not my pets" photos from this tool? This will not affect Immich.`)) return;
+  try {
+    await api('/api/negatives/all', { method: 'DELETE' });
+    negIds = [];
+    await loadNegatives();
+    toast('All "not my pets" cleared', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
@@ -405,9 +460,9 @@ async function submitAddPet() {
   try {
     await api('/api/pets', { method: 'POST', body: { name, description, since: sinceRaw || null, until: untilRaw || null } });
     closeModal();
-    await refreshState();
+    await loadPets(true);
+    await selectPet(name);
     toast(`Created ${name}`, 'success');
-    selectPet(name);
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
@@ -446,10 +501,11 @@ async function submitEditPet() {
   try {
     await api(`/api/pets/${encodeURIComponent(_petToEdit)}`, { method: 'PATCH', body: { name, description, since: sinceRaw || null, until: untilRaw || null } });
     closeEditModal();
-    const wasActive = activePet?.name === _petToEdit;
+    const prevName = activePet?.name;
     activePet = null; clearSearch();
-    await loadPets();
-    if (wasActive) await selectPet(name);
+    await loadPets(true);
+    const selectName = prevName === _petToEdit ? name : (prevName || pets[0]?.name);
+    if (selectName) await selectPet(selectName);
     toast('Saved', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
@@ -461,25 +517,114 @@ function openDeletePet(name) {
   const p = pets.find(p => p.name === name);
   const refs = p ? p.ref_count : 0;
   document.getElementById('deleteWarningText').textContent =
-    `"${name}" will be permanently removed from Immich and all ${refs} reference photo${refs !== 1 ? 's' : ''} will be untagged.`;
+    `"Delete from Immich too" removes the person and untags all ${refs} photo${refs !== 1 ? 's' : ''} in Immich permanently. Your photos are not deleted.`;
+  document.getElementById('deleteLocalOnlyText').textContent =
+    `"Remove from tool only" keeps ${name} in Immich with all tagged photos intact, but stops auto-tagging new photos. Your photos are not deleted. You can re-import it later.`;
   document.getElementById('deletePetModal').classList.add('open');
 }
 function closeDeleteModal() { document.getElementById('deletePetModal').classList.remove('open'); _petToDelete = null; }
 
-async function confirmDeletePet() {
+async function confirmDeletePet(localOnly) {
   if (!_petToDelete) return;
   const name = _petToDelete;
   closeDeleteModal();
   try {
-    await api(`/api/pets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const url = `/api/pets/${encodeURIComponent(name)}` + (localOnly ? '?local_only=true' : '');
+    await api(url, { method: 'DELETE' });
     if (activePet?.name === name) {
       activePet = null;
       document.getElementById('refsTitle').textContent = 'No pet selected';
       document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Select a pet</div></div>';
     }
     await refreshState();
-    toast(`Deleted ${name}`, 'success');
+    toast(localOnly ? `Removed ${name} from tool` : `Deleted ${name}`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ---------------------------------------------------------------------------
+// Import from Immich
+// ---------------------------------------------------------------------------
+
+let _allImportPeople = [], _importSelectedPerson = null;
+
+async function openImportPet() {
+  _importSelectedPerson = null;
+  _allImportPeople = [];
+  document.getElementById('importSearch').value = '';
+  document.getElementById('importPeopleGrid').innerHTML = '<div class="loading">Loading…</div>';
+  clearModalError('importPickerError');
+  document.getElementById('importPickerModal').classList.add('open');
+  try {
+    const d = await api('/api/immich-people');
+    _allImportPeople = d.people || [];
+    renderImportPeople(_allImportPeople);
+  } catch(e) {
+    document.getElementById('importPeopleGrid').innerHTML = `<div class="empty" style="grid-column:1/-1;padding:24px;"><div class="empty-sub">${e.message}</div></div>`;
+  }
+}
+
+function renderImportPeople(people) {
+  const grid = document.getElementById('importPeopleGrid');
+  if (!people.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;padding:24px;"><div class="empty-sub">No people found in Immich</div></div>';
+    return;
+  }
+  const petPersonIds = new Set(pets.map(p => p.person_id).filter(Boolean));
+  grid.innerHTML = people.map(p => `
+    <div class="person-card${petPersonIds.has(p.id) ? ' already-added' : ''}" data-pid="${p.id}" onclick="handlePersonCardClick(this)">
+      <img class="person-thumb" src="/api/person-thumb/${p.id}" onerror="this.style.opacity=0.2" loading="lazy" alt="">
+      <span class="person-name-label">${p.name || '—'}</span>
+    </div>`).join('');
+}
+
+function filterImportPeople() {
+  const q = document.getElementById('importSearch').value.toLowerCase();
+  renderImportPeople(q ? _allImportPeople.filter(p => (p.name || '').toLowerCase().includes(q)) : _allImportPeople);
+}
+
+function handlePersonCardClick(el) {
+  const id = el.dataset.pid;
+  const person = _allImportPeople.find(p => p.id === id);
+  if (!person) return;
+  _importSelectedPerson = person;
+  document.getElementById('importPickerModal').classList.remove('open');
+  document.getElementById('importPetName').value = person.name || '';
+  document.getElementById('importPetDescription').value = '';
+  document.getElementById('importPetSince').value = '';
+  document.getElementById('importPetUntil').value = '';
+  clearModalError('importDetailError');
+  document.getElementById('importDetailModal').classList.add('open');
+  setTimeout(() => document.getElementById('importPetDescription').focus(), 100);
+}
+
+function closeImportPicker() { document.getElementById('importPickerModal').classList.remove('open'); }
+function closeImportDetail() { document.getElementById('importDetailModal').classList.remove('open'); _importSelectedPerson = null; }
+function backToImportPicker() { document.getElementById('importDetailModal').classList.remove('open'); document.getElementById('importPickerModal').classList.add('open'); }
+
+async function submitImportPet() {
+  if (!_importSelectedPerson) return;
+  clearModalError('importDetailError');
+  const description = document.getElementById('importPetDescription').value.trim();
+  if (!description) { modalError('importDetailError', 'Description is required'); return; }
+  const sinceRaw = document.getElementById('importPetSince').value;
+  const untilRaw = document.getElementById('importPetUntil').value;
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (sinceRaw && !dateRe.test(sinceRaw)) { modalError('importDetailError', 'Invalid "since" date'); return; }
+  if (untilRaw && !dateRe.test(untilRaw)) { modalError('importDetailError', 'Invalid "until" date'); return; }
+  if (sinceRaw && untilRaw && sinceRaw > untilRaw) { modalError('importDetailError', '"Since" must be before "until"'); return; }
+  try {
+    const result = await api('/api/pets/import', { method: 'POST', body: {
+      person_id: _importSelectedPerson.id,
+      name: _importSelectedPerson.name,
+      description,
+      since: sinceRaw || null,
+      until: untilRaw || null,
+    }});
+    closeImportDetail();
+    await refreshState();
+    await selectPet(result.name);
+    toast(`Imported ${result.name} with ${result.ref_count} refs`, 'success');
+  } catch(e) { modalError('importDetailError', e.message); }
 }
 
 // ---------------------------------------------------------------------------
@@ -489,6 +634,8 @@ async function confirmDeletePet() {
 document.getElementById('addPetModal').addEventListener('click', function(e) { if (e.target === this) closeModal(); });
 document.getElementById('editPetModal').addEventListener('click', function(e) { if (e.target === this) closeEditModal(); });
 document.getElementById('deletePetModal').addEventListener('click', function(e) { if (e.target === this) closeDeleteModal(); });
+document.getElementById('importPickerModal').addEventListener('click', function(e) { if (e.target === this) closeImportPicker(); });
+document.getElementById('importDetailModal').addEventListener('click', function(e) { if (e.target === this) closeImportDetail(); });
 
 // ---------------------------------------------------------------------------
 // Init

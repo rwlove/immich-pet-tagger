@@ -477,7 +477,7 @@ async def get_borderline(name: str, limit: int = 40):
 
     def compute():
         state.borderline_progress["current"] = 0
-        state.borderline_progress["total"] = len(candidates)
+        state.borderline_progress["total"] = 0
         state.borderline_progress["running"] = True
         try:
             result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
@@ -487,6 +487,7 @@ async def get_borderline(name: str, limit: int = 40):
             if name not in names:
                 return []
             pet_idx = names.index(name)
+            state.borderline_progress["total"] = len(candidates)
             scored = []
             for i, a in enumerate(candidates):
                 if state.borderline_request_id != my_id:
@@ -550,7 +551,7 @@ async def get_neg_candidates(limit: int = 60):
 
     def compute():
         state.neg_progress["current"] = 0
-        state.neg_progress["total"] = len(candidates)
+        state.neg_progress["total"] = 0
         state.neg_progress["running"] = True
         try:
             result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
@@ -558,6 +559,7 @@ async def get_neg_candidates(limit: int = 60):
                 return []
             names, clf, scaler = result
             unknown_idx = names.index("unknown") if "unknown" in names else -1
+            state.neg_progress["total"] = len(candidates)
             scored = []
             for i, a in enumerate(candidates):
                 if state.neg_request_id != my_id:

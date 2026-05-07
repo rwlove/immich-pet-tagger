@@ -188,7 +188,9 @@ async function viewBorderline() {
     try {
       const p = await api(`/api/pets/${encodeURIComponent(petName)}/borderline/progress`);
       const el = document.getElementById('blLoadMsg');
-      if (el && p.total > 0) el.textContent = `Classifying ${p.current} / ${p.total} photos…`;
+      if (!el) return;
+      if (p.total > 0) el.textContent = `Classifying ${p.current} / ${p.total} photos…`;
+      else if (p.running) el.textContent = 'Building classifier…';
     } catch(_) {}
   }, 1000);
 
@@ -381,7 +383,9 @@ async function viewNegCandidates() {
     try {
       const p = await api('/api/suggestions/negatives/progress');
       const el = document.getElementById('negLoadMsg');
-      if (el && p.total > 0) el.textContent = `Classifying ${p.current} / ${p.total} photos…`;
+      if (!el) return;
+      if (p.total > 0) el.textContent = `Classifying ${p.current} / ${p.total} photos…`;
+      else if (p.running) el.textContent = 'Building classifier…';
     } catch(_) {}
   }, 1000);
 

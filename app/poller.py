@@ -31,6 +31,7 @@ CLIP_PRETRAINED = os.environ.get("CLIP_PRETRAINED", "openai")
 _clip_model = None
 _clip_preprocess = None
 _clip_device = None
+_embed_cache: dict[str, np.ndarray] = {}
 
 
 def get_clip():
@@ -118,15 +119,18 @@ def crop_animals(img: Image.Image) -> list[tuple[tuple, Image.Image]]:
 
 
 def embed_asset(asset_id: str) -> np.ndarray | None:
+    if asset_id in _embed_cache:
+        return _embed_cache[asset_id]
     img = fetch_thumbnail(asset_id)
     if img is None:
         return None
     crops = crop_animals(img)
-    if crops:
-        vec = embed_image(crops[0][1])
-        if vec is not None:
-            return vec
-    return embed_image(img)
+    vec = embed_image(crops[0][1]) if crops else None
+    if vec is None:
+        vec = embed_image(img)
+    if vec is not None:
+        _embed_cache[asset_id] = vec
+    return vec
 
 
 # ---------------------------------------------------------------------------

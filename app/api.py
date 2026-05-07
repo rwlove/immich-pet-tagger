@@ -448,10 +448,14 @@ async def get_borderline(name: str, limit: int = 40):
                 if LOW <= pet_prob < HIGH:
                     scored.append((pet_prob, a))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [a for _, a in scored[:limit]]
+        return scored[:limit]
 
-    results = await asyncio.to_thread(compute)
-    return {"assets": [_slim_asset(a) for a in results]}
+    from poller import THRESHOLD
+    scored = await asyncio.to_thread(compute)
+    return {
+        "assets": [{**_slim_asset(a), "score": round(prob, 3)} for prob, a in scored],
+        "threshold": THRESHOLD,
+    }
 
 
 @router.get("/suggestions/negatives")

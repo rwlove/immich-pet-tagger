@@ -183,11 +183,15 @@ async function viewBorderline() {
       grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No missed photos found</div><div class="empty-sub">The classifier is either very confident or not finding this pet at all</div></div>';
       return;
     }
-    grid.innerHTML = d.assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+    const thr = d.threshold ?? 0.8;
+    grid.innerHTML = d.assets.map(a => {
+      const cls = a.score < thr ? 'score-low' : 'score-ok';
+      return `<div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
         <div class="photo-check">✓</div>
-      </div>`).join('');
+        <div class="score-badge ${cls}">${Math.round(a.score * 100)}%</div>
+      </div>`;
+    }).join('');
     const refSet = new Set(refsIds), negSet = new Set(negIds);
     d.assets.forEach(a => {
       if (refSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-ref');

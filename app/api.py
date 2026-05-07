@@ -389,6 +389,71 @@ async def get_suggestions(name: str, limit: int = 20):
     return {"assets": [_slim_asset(a) for a in results]}
 
 
+@router.get("/pets/{name}/borderline")
+async def get_borderline(name: str, limit: int = 40):
+    from poller import build_classifier
+    config = data.load_config(DATA_DIR)
+    if name not in config:
+        raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
+
+    pet_cfg = config[name]
+    description = pet_cfg.get("description", "").strip()
+    if not description:
+        raise HTTPException(status_code=400, detail="no_description")
+
+    ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
+    if not ref_ids:
+        raise HTTPException(status_code=400, detail="no_refs")
+
+    ref_set = set(ref_ids)
+    neg_ids = set(data.load_negative_ids(DATA_DIR))
+
+    body: dict = {"query": description, "type": "IMAGE", "limit": 100}
+    if pet_cfg.get("since"):
+        body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+    if pet_cfg.get("until"):
+        body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    all_items = resp.json().get("assets", {}).get("items", [])
+    candidates = [a for a in all_items if a["id"] not in ref_set and a["id"] not in neg_ids]
+    if not candidates:
+        return {"assets": []}
+
+    all_pet_names = list(config.keys())
+    all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    pet_names = [n for n in all_pet_names if all_ref_ids.get(n)]
+    ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}
+    negative_ids = data.load_negative_ids(DATA_DIR)
+
+    LOW, HIGH = 0.3, 0.85
+
+    def compute():
+        result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
+        if result is None:
+            return []
+        names, clf, scaler = result
+        if name not in names:
+            return []
+        pet_idx = names.index(name)
+        scored = []
+        for a in candidates:
+            vec = embed_asset(a["id"])
+            if vec is not None:
+                v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
+                pet_prob = float(clf.predict_proba(scaler.transform(v))[0][pet_idx])
+                if LOW <= pet_prob < HIGH:
+                    scored.append((pet_prob, a))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [a for _, a in scored[:limit]]
+
+    results = await asyncio.to_thread(compute)
+    return {"assets": [_slim_asset(a) for a in results]}
+
+
 @router.get("/suggestions/negatives")
 async def get_neg_candidates(limit: int = 60):
     from poller import build_classifier

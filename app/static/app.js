@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, lastClickedId = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -73,7 +73,7 @@ async function selectPet(name) {
     const ok = confirm(`You have ${selectedIds.size} selected photo${selectedIds.size !== 1 ? 's' : ''} not yet assigned. Switch anyway?`);
     if (!ok) return;
   }
-  taggedMode = false; negCandidateMode = false;
+  taggedMode = false; negCandidateMode = false; borderlineMode = false;
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
@@ -164,6 +164,39 @@ async function viewSuggestions() {
     label.textContent = 'Failed to load suggestions';
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
     toast('Suggestions error: ' + e.message, 'error');
+  }
+}
+
+async function viewBorderline() {
+  if (!activePet) return;
+  if (!activePet.description) { toast('Edit this pet and add a description to use this feature', 'error'); return; }
+  taggedMode = false; negCandidateMode = false; borderlineMode = true;
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
+  const grid = document.getElementById('photoGrid');
+  const label = document.getElementById('resultsLabel');
+  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding missed photos… this may take a moment</div>';
+  label.textContent = 'Finding missed photos…';
+  try {
+    const d = await api(`/api/pets/${encodeURIComponent(activePet.name)}/borderline`);
+    label.textContent = `${d.assets.length} photo${d.assets.length !== 1 ? 's' : ''} ${activePet.name} might be missing — add good ones as refs to improve accuracy`;
+    if (!d.assets.length) {
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No missed photos found</div><div class="empty-sub">The classifier is either very confident or not finding this pet at all</div></div>';
+      return;
+    }
+    grid.innerHTML = d.assets.map(a => `
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <div class="photo-check">✓</div>
+      </div>`).join('');
+    const refSet = new Set(refsIds), negSet = new Set(negIds);
+    d.assets.forEach(a => {
+      if (refSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-ref');
+      if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
+    });
+  } catch(e) {
+    label.textContent = 'Failed to load missed photos';
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
+    toast('Error: ' + e.message, 'error');
   }
 }
 

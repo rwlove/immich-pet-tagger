@@ -157,6 +157,7 @@ async function viewSuggestions() {
     grid.innerHTML = d.assets.map(a => `
       <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
         <div class="photo-check">✓</div>
       </div>`).join('');
     const refSet = new Set(refsIds), negSet = new Set(negIds);
@@ -208,6 +209,7 @@ async function viewBorderline() {
       const cls = a.score < thr ? 'score-low' : 'score-ok';
       return `<div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
         <div class="photo-check">✓</div>
         <div class="score-badge ${cls}">${Math.round(a.score * 100)}%</div>
       </div>`;
@@ -250,6 +252,7 @@ async function viewTagged() {
     grid.innerHTML = d.assets.map(a => `
       <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename || a.id} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
         <div class="photo-check">✓</div>
       </div>`).join('');
   } catch(e) {
@@ -406,6 +409,7 @@ async function viewNegCandidates() {
       const badge = a.score != null ? `<div class="score-badge ${cls}">${Math.round(a.score * 100)}%</div>` : '';
       return `<div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
         <div class="photo-check">✓</div>
         ${badge}
       </div>`;

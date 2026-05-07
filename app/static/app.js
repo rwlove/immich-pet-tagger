@@ -422,8 +422,16 @@ async function applyTimestamp() {
   if (!val) { toast('Pick a date first', 'error'); return; }
   try {
     await api('/api/timestamp', { method: 'POST', body: { date: val } });
-    toast('Scan date updated. Takes effect on next poll.', 'success');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
+    await api('/api/scan', { method: 'POST' });
+    loadPollStatus();
+    const iv = setInterval(async () => {
+      await loadPollStatus();
+      if (!document.getElementById('pollBadge').classList.contains('running')) clearInterval(iv);
+    }, 2000);
+  } catch(e) {
+    const msg = e.message.includes('409') || e.message.includes('already') ? 'Scan already in progress' : e.message;
+    toast(msg, 'error');
+  }
 }
 
 // ---------------------------------------------------------------------------

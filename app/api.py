@@ -536,6 +536,22 @@ async def set_timestamp(body: TimestampBody):
     return {"timestamp": ts}
 
 
+@router.post("/scan")
+async def trigger_scan():
+    import state
+    if state.scan_lock is None or state.scan_lock.locked():
+        raise HTTPException(status_code=409, detail="Scan already in progress")
+    asyncio.create_task(_run_manual_scan())
+    return {"status": "started"}
+
+
+async def _run_manual_scan():
+    import state
+    from poller import run_poll_cycle
+    async with state.scan_lock:
+        await asyncio.to_thread(run_poll_cycle, DATA_DIR)
+
+
 # ---------------------------------------------------------------------------
 # Immich people list (for import)
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 
 from poller import run_poll_cycle
 from api import router as api_router
+import state
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +33,8 @@ async def polling_loop():
     while True:
         try:
             log.info("Starting poll cycle...")
-            await asyncio.to_thread(run_poll_cycle, DATA_DIR)
+            async with state.scan_lock:
+                await asyncio.to_thread(run_poll_cycle, DATA_DIR)
             log.info("Poll cycle complete.")
         except Exception as e:
             log.exception(f"Poll cycle failed: {e}")
@@ -41,6 +43,7 @@ async def polling_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    state.init()
     task = asyncio.create_task(polling_loop())
     yield
     task.cancel()

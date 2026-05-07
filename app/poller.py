@@ -102,9 +102,31 @@ def embed_image(img: Image.Image) -> np.ndarray | None:
         return None
 
 
+def crop_animals(img: Image.Image) -> list[tuple[tuple, Image.Image]]:
+    """Detect animals and return (bbox_norm, crop) pairs. Empty list means no animals found."""
+    try:
+        from detector import detect_animals
+        boxes = detect_animals(img)
+    except Exception as e:
+        log.warning(f"YOLO detection failed: {e}")
+        return []
+    w, h = img.size
+    return [
+        (bbox, img.crop((int(bbox[0] * w), int(bbox[1] * h), int(bbox[2] * w), int(bbox[3] * h))))
+        for bbox in boxes
+    ]
+
+
 def embed_asset(asset_id: str) -> np.ndarray | None:
     img = fetch_thumbnail(asset_id)
-    return embed_image(img) if img is not None else None
+    if img is None:
+        return None
+    crops = crop_animals(img)
+    if crops:
+        vec = embed_image(crops[0][1])
+        if vec is not None:
+            return vec
+    return embed_image(img)
 
 
 # ---------------------------------------------------------------------------
@@ -179,15 +201,23 @@ def classify(vec, names, clf, scaler) -> tuple[str, float]:
 # Face assignment
 # ---------------------------------------------------------------------------
 
-def post_face(asset_id: str, person_id: str) -> str | None:
+def post_face(asset_id: str, person_id: str, bbox_norm=None, img_size=None) -> str | None:
     """Returns face_id on success, None on failure."""
+    if bbox_norm is not None and img_size is not None:
+        x1, y1, x2, y2 = bbox_norm
+        iw, ih = img_size
+        bx, by = int(x1 * iw), int(y1 * ih)
+        bw, bh = int((x2 - x1) * iw), int((y2 - y1) * ih)
+    else:
+        bx, by, bw, bh = 0, 0, imm.FACE_BOX_SIZE, imm.FACE_BOX_SIZE
+        iw, ih = imm.FACE_BOX_SIZE, imm.FACE_BOX_SIZE
     try:
         r = requests.post(
             f"{imm.IMMICH_URL}/api/faces",
             json={"assetId": asset_id, "personId": person_id,
-                  "width": imm.FACE_BOX_SIZE, "height": imm.FACE_BOX_SIZE,
-                  "imageWidth": imm.FACE_BOX_SIZE, "imageHeight": imm.FACE_BOX_SIZE,
-                  "x": 0, "y": 0},
+                  "width": bw, "height": bh,
+                  "imageWidth": iw, "imageHeight": ih,
+                  "x": bx, "y": by},
             headers={**imm.headers(), "Content-Type": "application/json"},
             timeout=30,
         )
@@ -275,47 +305,60 @@ def _run_poll_cycle(dd: Path, counts: dict) -> None:
         if time_str > latest_ts:
             latest_ts = time_str
 
-        vec = embed_asset(aid)
-        if vec is None:
+        img = fetch_thumbnail(aid)
+        if img is None:
             counts["no_thumb"] += 1
             continue
 
-        pet_name, prob = classify(vec, names, clf, scaler)
+        crops = crop_animals(img)
+        if not crops:
+            crops = [(None, img)]
 
-        if pet_name == "unknown":
-            counts["unknown"] += 1
-            continue
+        existing_persons = imm.fetch_asset_face_person_ids(aid)
+        tagged_in_photo: set[str] = set()
 
-        if prob < THRESHOLD:
-            counts["low_confidence"] += 1
-            continue
+        for bbox_norm, crop in crops:
+            vec = embed_image(crop)
+            if vec is None:
+                continue
 
-        cfg = config.get(pet_name, {})
-        if not asset_in_range(time_str, cfg.get("since"), cfg.get("until")):
-            counts["out_of_range"] += 1
-            continue
+            pet_name, prob = classify(vec, names, clf, scaler)
 
-        person_id = cfg.get("person_id")
-        if not person_id:
-            log.warning(f"Pet '{pet_name}' has no person_id in config.")
-            continue
+            if pet_name == "unknown":
+                counts["unknown"] += 1
+                continue
 
-        existing = imm.fetch_asset_face_person_ids(aid)
-        if person_id in existing:
-            counts["already_tagged"] += 1
-            continue
+            if prob < THRESHOLD:
+                counts["low_confidence"] += 1
+                continue
 
-        log.info(f"{imm.IMMICH_URL}/search/photos/{aid} -> {pet_name} ({prob:.3f}) | {time_str[:10]}")
+            cfg = config.get(pet_name, {})
+            if not asset_in_range(time_str, cfg.get("since"), cfg.get("until")):
+                counts["out_of_range"] += 1
+                continue
 
-        if DRY_RUN:
-            log.info(f"  dry-run: would add {pet_name}")
-            counts["added"] += 1
-        else:
-            face_id = post_face(aid, person_id)
-            if face_id:
+            person_id = cfg.get("person_id")
+            if not person_id:
+                log.warning(f"Pet '{pet_name}' has no person_id in config.")
+                continue
+
+            if person_id in existing_persons or person_id in tagged_in_photo:
+                counts["already_tagged"] += 1
+                continue
+
+            log.info(f"{imm.IMMICH_URL}/search/photos/{aid} -> {pet_name} ({prob:.3f}) | {time_str[:10]}")
+
+            if DRY_RUN:
+                log.info(f"  dry-run: would add {pet_name}")
                 counts["added"] += 1
+                tagged_in_photo.add(person_id)
             else:
-                counts["failed"] += 1
+                face_id = post_face(aid, person_id, bbox_norm, img.size if bbox_norm is not None else None)
+                if face_id:
+                    counts["added"] += 1
+                    tagged_in_photo.add(person_id)
+                else:
+                    counts["failed"] += 1
 
     log.info(f"Summary: {counts}")
 

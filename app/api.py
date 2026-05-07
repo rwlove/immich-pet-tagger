@@ -59,6 +59,53 @@ def _slim_asset(a: dict) -> dict:
     return {"id": a["id"], "thumb": f"/api/thumb/{a['id']}", "date": a.get("localDateTime", "")[:10], "filename": a.get("originalFileName", "")}
 
 
+async def _visual_search(
+    client: httpx.AsyncClient,
+    ref_ids: list[str],
+    pet_cfg: dict,
+    exclude: set[str],
+    sample: int = 8,
+    per_ref_limit: int = 50,
+) -> list[dict]:
+    """Query Immich smart search using ref asset IDs instead of text.
+    Runs all ref queries in parallel and returns deduplicated candidates."""
+    if len(ref_ids) > sample:
+        step = len(ref_ids) / sample
+        sampled = [ref_ids[int(i * step)] for i in range(sample)]
+    else:
+        sampled = ref_ids
+
+    base: dict = {"type": "IMAGE", "limit": per_ref_limit}
+    if pet_cfg.get("since"):
+        base["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+    if pet_cfg.get("until"):
+        base["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+
+    async def fetch_one(rid: str) -> list[dict]:
+        try:
+            resp = await client.post(
+                f"{imm.IMMICH_URL}/api/search/smart",
+                headers=imm.headers(),
+                json={**base, "queryAssetId": rid},
+            )
+            if resp.status_code == 200:
+                return resp.json().get("assets", {}).get("items", [])
+        except Exception:
+            pass
+        return []
+
+    results = await asyncio.gather(*[fetch_one(rid) for rid in sampled])
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for items in results:
+        for a in items:
+            aid = a.get("id")
+            if aid and aid not in exclude and aid not in seen:
+                seen.add(aid)
+                candidates.append(a)
+    return candidates
+
+
 # ---------------------------------------------------------------------------
 # Pets
 # ---------------------------------------------------------------------------
@@ -340,20 +387,25 @@ async def get_suggestions(name: str, limit: int = 20):
     ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
     ref_set = set(ref_ids)
     neg_ids = set(data.load_negative_ids(DATA_DIR))
+    exclude = ref_set | neg_ids
 
-    # Stage 1: smart search to get a relevant candidate pool
-    body: dict = {"query": description, "type": "IMAGE", "limit": 60}
-    if pet_cfg.get("since"):
-        body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
-    if pet_cfg.get("until"):
-        body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        if ref_ids:
+            # Stage 1: visual search using ref photos as queries
+            candidates = await _visual_search(client, ref_ids, pet_cfg, exclude)
+        else:
+            # Fallback for 0-ref case: text search
+            body: dict = {"query": description, "type": "IMAGE", "limit": 60}
+            if pet_cfg.get("since"):
+                body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
+            if pet_cfg.get("until"):
+                body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
+            resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+            if resp.status_code != 200:
+                raise HTTPException(status_code=resp.status_code, detail=resp.text)
+            all_items = resp.json().get("assets", {}).get("items", [])
+            candidates = [a for a in all_items if a["id"] not in exclude]
 
-    all_items = resp.json().get("assets", {}).get("items", [])
-    candidates = [a for a in all_items if a["id"] not in ref_set and a["id"] not in neg_ids]
     if not candidates:
         return {"assets": []}
 
@@ -397,29 +449,17 @@ async def get_borderline(name: str, limit: int = 40):
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
 
     pet_cfg = config[name]
-    description = pet_cfg.get("description", "").strip()
-    if not description:
-        raise HTTPException(status_code=400, detail="no_description")
-
     ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
     if not ref_ids:
         raise HTTPException(status_code=400, detail="no_refs")
 
     ref_set = set(ref_ids)
     neg_ids = set(data.load_negative_ids(DATA_DIR))
+    exclude = ref_set | neg_ids
 
-    body: dict = {"query": description, "type": "IMAGE", "limit": 100}
-    if pet_cfg.get("since"):
-        body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
-    if pet_cfg.get("until"):
-        body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
     async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+        candidates = await _visual_search(client, ref_ids, pet_cfg, exclude)
 
-    all_items = resp.json().get("assets", {}).get("items", [])
-    candidates = [a for a in all_items if a["id"] not in ref_set and a["id"] not in neg_ids]
     if not candidates:
         return {"assets": []}
 
@@ -472,21 +512,31 @@ async def get_neg_candidates(limit: int = 60):
     seen: set[str] = set()
     candidates = []
     async with httpx.AsyncClient(timeout=30) as client:
+        tasks = []
         for name, pet_cfg in config.items():
-            description = pet_cfg.get("description", "").strip()
-            if not description:
-                continue
-            body: dict = {"query": description, "type": "IMAGE", "limit": 100}
-            if pet_cfg.get("since"):
-                body["takenAfter"] = pet_cfg["since"] + "T00:00:00.000Z"
-            if pet_cfg.get("until"):
-                body["takenBefore"] = pet_cfg["until"] + "T23:59:59.999Z"
-            resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
-            if resp.status_code != 200:
-                continue
-            for a in resp.json().get("assets", {}).get("items", []):
+            pet_refs = data.load_pet_asset_ids(name, DATA_DIR)
+            if pet_refs:
+                tasks.append(_visual_search(client, pet_refs, pet_cfg, exclude, sample=3))
+            elif pet_cfg.get("description", "").strip():
+                # fallback for pets with no refs yet
+                async def _text_search(pc=pet_cfg):
+                    body: dict = {"query": pc["description"].strip(), "type": "IMAGE", "limit": 50}
+                    if pc.get("since"):
+                        body["takenAfter"] = pc["since"] + "T00:00:00.000Z"
+                    if pc.get("until"):
+                        body["takenBefore"] = pc["until"] + "T23:59:59.999Z"
+                    try:
+                        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
+                        if resp.status_code == 200:
+                            return [a for a in resp.json().get("assets", {}).get("items", []) if a.get("id") not in exclude]
+                    except Exception:
+                        pass
+                    return []
+                tasks.append(_text_search())
+        for items in await asyncio.gather(*tasks):
+            for a in items:
                 aid = a.get("id")
-                if aid and aid not in exclude and aid not in seen:
+                if aid and aid not in seen:
                     seen.add(aid)
                     candidates.append(a)
 

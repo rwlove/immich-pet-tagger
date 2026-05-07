@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null, lastNegTopScore = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -296,16 +296,22 @@ function updateSelUI() {
 // ---------------------------------------------------------------------------
 
 function updateNegStatus() {
-  const totalRefs = pets.reduce((s, p) => s + p.ref_count, 0);
   const el = document.getElementById('negCount');
   const count = negIds.length;
-  if (totalRefs === 0) { el.textContent = count; el.style.color = ''; return; }
-  const lo = totalRefs * 2, hi = totalRefs * 3;
-  if (count < lo) {
-    el.textContent = `${count} / ${lo}-${hi} needed`;
-    el.style.color = 'var(--danger)';
-  } else {
+  if (lastNegTopScore === null) {
     el.textContent = count;
+    el.style.color = '';
+    return;
+  }
+  const pct = Math.round(lastNegTopScore * 100);
+  if (lastNegTopScore >= 0.1) {
+    el.textContent = `${count} · top ${pct}%, add more`;
+    el.style.color = 'var(--danger)';
+  } else if (lastNegTopScore >= 0.05) {
+    el.textContent = `${count} · top ${pct}%`;
+    el.style.color = 'var(--text2)';
+  } else {
+    el.textContent = `${count} · calibrated`;
     el.style.color = 'var(--success)';
   }
 }
@@ -334,7 +340,7 @@ async function addSelectedAsNegatives() {
     await api('/api/negatives', { method: 'POST', body: { asset_ids: [...selectedIds] } });
     negIds = [...new Set([...negIds, ...selectedIds])];
     document.querySelectorAll('.photo-thumb.selected').forEach(el => { el.classList.remove('selected'); el.classList.add('is-neg'); });
-    selectedIds.clear(); updateSelUI();
+    selectedIds.clear(); lastNegTopScore = null; updateSelUI();
     await loadNegatives();
     toast('Added to "not my pets"', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
@@ -349,16 +355,23 @@ async function viewNegCandidates() {
   label.textContent = 'Finding candidates…';
   try {
     const d = await api('/api/suggestions/negatives');
+    lastNegTopScore = d.assets.length > 0 ? (d.assets[0].score ?? null) : 0;
+    updateNegStatus();
     label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
     if (!d.assets.length) {
-      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No candidates found</div><div class="empty-sub">Add more refs or descriptions to your pets</div></div>';
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No candidates found</div><div class="empty-sub">Classifier is well calibrated</div></div>';
       return;
     }
-    grid.innerHTML = d.assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
+    const thr = d.threshold || 0.8;
+    grid.innerHTML = d.assets.map(a => {
+      const cls = a.score != null ? (a.score < thr ? 'score-low' : 'score-ok') : '';
+      const badge = a.score != null ? `<div class="score-badge ${cls}">${Math.round(a.score * 100)}%</div>` : '';
+      return `<div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename} · ${a.date}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
         <div class="photo-check">✓</div>
-      </div>`).join('');
+        ${badge}
+      </div>`;
+    }).join('');
     const negSet = new Set(negIds);
     d.assets.forEach(a => {
       if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
@@ -386,7 +399,7 @@ async function clearAllNegatives() {
   if (!confirm(`Remove all "not my pets" photos from this tool? This will not affect Immich.`)) return;
   try {
     await api('/api/negatives/all', { method: 'DELETE' });
-    negIds = [];
+    negIds = []; lastNegTopScore = null;
     await loadNegatives();
     toast('All "not my pets" cleared', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }

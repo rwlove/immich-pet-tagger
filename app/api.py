@@ -500,58 +500,36 @@ async def get_borderline(name: str, limit: int = 40):
 
 @router.get("/suggestions/negatives")
 async def get_neg_candidates(limit: int = 60):
-    from poller import build_classifier
+    from poller import build_classifier, THRESHOLD
     config = data.load_config(DATA_DIR)
-
-    all_ref_ids: set[str] = set()
-    for name in config:
-        all_ref_ids.update(data.load_pet_asset_ids(name, DATA_DIR))
-    neg_ids = set(data.load_negative_ids(DATA_DIR))
-    exclude = all_ref_ids | neg_ids
-
-    seen: set[str] = set()
-    candidates = []
-    async with httpx.AsyncClient(timeout=30) as client:
-        tasks = []
-        for name, pet_cfg in config.items():
-            pet_refs = data.load_pet_asset_ids(name, DATA_DIR)
-            if pet_refs:
-                tasks.append(_visual_search(client, pet_refs, pet_cfg, exclude, sample=3))
-            elif pet_cfg.get("description", "").strip():
-                # fallback for pets with no refs yet
-                async def _text_search(pc=pet_cfg):
-                    body: dict = {"query": pc["description"].strip(), "type": "IMAGE", "limit": 50}
-                    if pc.get("since"):
-                        body["takenAfter"] = pc["since"] + "T00:00:00.000Z"
-                    if pc.get("until"):
-                        body["takenBefore"] = pc["until"] + "T23:59:59.999Z"
-                    try:
-                        resp = await client.post(f"{imm.IMMICH_URL}/api/search/smart", headers=imm.headers(), json=body)
-                        if resp.status_code == 200:
-                            return [a for a in resp.json().get("assets", {}).get("items", []) if a.get("id") not in exclude]
-                    except Exception:
-                        pass
-                    return []
-                tasks.append(_text_search())
-        for items in await asyncio.gather(*tasks):
-            for a in items:
-                aid = a.get("id")
-                if aid and aid not in seen:
-                    seen.add(aid)
-                    candidates.append(a)
-
-    if not candidates:
-        return {"assets": []}
 
     all_pet_names = list(config.keys())
     ref_ids_per_pet = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    all_ref_ids: set[str] = {rid for ids in ref_ids_per_pet.values() for rid in ids}
+    neg_ids = set(data.load_negative_ids(DATA_DIR))
+    exclude = all_ref_ids | neg_ids
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(
+            f"{imm.IMMICH_URL}/api/search/random",
+            headers=imm.headers(),
+            json={"count": 300, "type": "IMAGE"},
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    candidates = [a for a in resp.json() if isinstance(a, dict) and a.get("id") not in exclude]
+
+    if not candidates:
+        return {"assets": [], "threshold": THRESHOLD}
+
     pet_names = [n for n in all_pet_names if ref_ids_per_pet.get(n)]
     negative_ids = data.load_negative_ids(DATA_DIR)
 
     def compute():
         result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
         if result is None:
-            return candidates[:limit]
+            return []
         names, clf, scaler = result
         unknown_idx = names.index("unknown") if "unknown" in names else -1
         scored = []
@@ -561,12 +539,17 @@ async def get_neg_candidates(limit: int = 60):
                 v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
                 probs = clf.predict_proba(scaler.transform(v))[0]
                 pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
-                scored.append((pet_prob, a))
+                # Skip photos the classifier thinks are pets. Those belong in refs, not negatives.
+                if pet_prob < THRESHOLD:
+                    scored.append((pet_prob, a))
         scored.sort(key=lambda x: x[0], reverse=True)
-        return [a for _, a in scored[:limit]]
+        return scored[:limit]
 
-    results = await asyncio.to_thread(compute)
-    return {"assets": [_slim_asset(a) for a in results]}
+    scored = await asyncio.to_thread(compute)
+    return {
+        "assets": [{**_slim_asset(a), "score": round(prob, 3)} for prob, a in scored],
+        "threshold": THRESHOLD,
+    }
 
 
 # ---------------------------------------------------------------------------

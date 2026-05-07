@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 import data
 import immich as imm
+import state
 from poller import embed_asset
 
 log = logging.getLogger("api")
@@ -527,29 +528,41 @@ async def get_neg_candidates(limit: int = 60):
     negative_ids = data.load_negative_ids(DATA_DIR)
 
     def compute():
-        result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
-        if result is None:
-            return []
-        names, clf, scaler = result
-        unknown_idx = names.index("unknown") if "unknown" in names else -1
-        scored = []
-        for a in candidates:
-            vec = embed_asset(a["id"])
-            if vec is not None:
-                v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
-                probs = clf.predict_proba(scaler.transform(v))[0]
-                pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
-                # Skip photos the classifier thinks are pets. Those belong in refs, not negatives.
-                if pet_prob < THRESHOLD:
-                    scored.append((pet_prob, a))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return scored[:limit]
+        state.neg_progress["current"] = 0
+        state.neg_progress["total"] = len(candidates)
+        state.neg_progress["running"] = True
+        try:
+            result = build_classifier(pet_names, ref_ids_per_pet, negative_ids)
+            if result is None:
+                return []
+            names, clf, scaler = result
+            unknown_idx = names.index("unknown") if "unknown" in names else -1
+            scored = []
+            for i, a in enumerate(candidates):
+                state.neg_progress["current"] = i + 1
+                vec = embed_asset(a["id"])
+                if vec is not None:
+                    v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
+                    probs = clf.predict_proba(scaler.transform(v))[0]
+                    pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
+                    # Skip photos the classifier thinks are pets. Those belong in refs, not negatives.
+                    if pet_prob < THRESHOLD:
+                        scored.append((pet_prob, a))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return scored[:limit]
+        finally:
+            state.neg_progress["running"] = False
 
     scored = await asyncio.to_thread(compute)
     return {
         "assets": [{**_slim_asset(a), "score": round(prob, 3)} for prob, a in scored],
         "threshold": THRESHOLD,
     }
+
+
+@router.get("/suggestions/negatives/progress")
+async def get_neg_progress():
+    return state.neg_progress
 
 
 # ---------------------------------------------------------------------------

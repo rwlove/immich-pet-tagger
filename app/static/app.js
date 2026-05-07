@@ -354,10 +354,21 @@ async function viewNegCandidates() {
   selectedIds.clear(); lastClickedId = null; updateSelUI();
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
-  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding candidates across all pets… this may take a moment</div>';
+  const loadingMsg = () => '<div class="loading" id="negLoadMsg" style="grid-column:1/-1">Classifying photos…</div>';
+  grid.innerHTML = loadingMsg();
   label.textContent = 'Finding candidates…';
+
+  let pollTimer = setInterval(async () => {
+    try {
+      const p = await api('/api/suggestions/negatives/progress');
+      const el = document.getElementById('negLoadMsg');
+      if (el && p.total > 0) el.textContent = `Classifying ${p.current} / ${p.total} photos…`;
+    } catch(_) {}
+  }, 1000);
+
   try {
     const d = await api('/api/suggestions/negatives');
+    clearInterval(pollTimer);
     lastNegTopScore = d.assets.length > 0 ? (d.assets[0].score ?? null) : 0;
     updateNegStatus();
     label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
@@ -380,6 +391,7 @@ async function viewNegCandidates() {
       if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
     });
   } catch(e) {
+    clearInterval(pollTimer);
     label.textContent = 'Failed to load candidates';
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
     toast('Error: ' + e.message, 'error');

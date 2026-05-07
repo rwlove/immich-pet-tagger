@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null, lastNegTopScore = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -350,15 +350,17 @@ async function addSelectedAsNegatives() {
 }
 
 async function viewNegCandidates() {
+  const myGen = ++negGeneration;
+  if (negPollTimer) { clearInterval(negPollTimer); negPollTimer = null; }
   negCandidateMode = true; taggedMode = false;
   selectedIds.clear(); lastClickedId = null; updateSelUI();
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
-  const loadingMsg = () => '<div class="loading" id="negLoadMsg" style="grid-column:1/-1">Classifying photos…</div>';
-  grid.innerHTML = loadingMsg();
+  grid.innerHTML = '<div class="loading" id="negLoadMsg" style="grid-column:1/-1">Classifying photos…</div>';
   label.textContent = 'Finding candidates…';
 
-  let pollTimer = setInterval(async () => {
+  negPollTimer = setInterval(async () => {
+    if (negGeneration !== myGen) { clearInterval(negPollTimer); negPollTimer = null; return; }
     try {
       const p = await api('/api/suggestions/negatives/progress');
       const el = document.getElementById('negLoadMsg');
@@ -368,7 +370,8 @@ async function viewNegCandidates() {
 
   try {
     const d = await api('/api/suggestions/negatives');
-    clearInterval(pollTimer);
+    clearInterval(negPollTimer); negPollTimer = null;
+    if (negGeneration !== myGen) return;
     lastNegTopScore = d.assets.length > 0 ? (d.assets[0].score ?? null) : 0;
     updateNegStatus();
     label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
@@ -391,7 +394,8 @@ async function viewNegCandidates() {
       if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg');
     });
   } catch(e) {
-    clearInterval(pollTimer);
+    clearInterval(negPollTimer); negPollTimer = null;
+    if (negGeneration !== myGen) return;
     label.textContent = 'Failed to load candidates';
     grid.innerHTML = `<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">${e.message}</div></div>`;
     toast('Error: ' + e.message, 'error');

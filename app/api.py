@@ -527,6 +527,9 @@ async def get_neg_candidates(limit: int = 60):
     pet_names = [n for n in all_pet_names if ref_ids_per_pet.get(n)]
     negative_ids = data.load_negative_ids(DATA_DIR)
 
+    state.neg_request_id += 1
+    my_id = state.neg_request_id
+
     def compute():
         state.neg_progress["current"] = 0
         state.neg_progress["total"] = len(candidates)
@@ -539,6 +542,8 @@ async def get_neg_candidates(limit: int = 60):
             unknown_idx = names.index("unknown") if "unknown" in names else -1
             scored = []
             for i, a in enumerate(candidates):
+                if state.neg_request_id != my_id:
+                    return []
                 state.neg_progress["current"] = i + 1
                 vec = embed_asset(a["id"])
                 if vec is not None:
@@ -551,7 +556,8 @@ async def get_neg_candidates(limit: int = 60):
             scored.sort(key=lambda x: x[0], reverse=True)
             return scored[:limit]
         finally:
-            state.neg_progress["running"] = False
+            if state.neg_request_id == my_id:
+                state.neg_progress["running"] = False
 
     scored = await asyncio.to_thread(compute)
     return {

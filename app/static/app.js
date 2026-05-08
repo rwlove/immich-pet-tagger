@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, scanLowConfMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -73,7 +73,7 @@ async function selectPet(name) {
     const ok = confirm(`You have ${selectedIds.size} selected photo${selectedIds.size !== 1 ? 's' : ''} not yet assigned. Switch anyway?`);
     if (!ok) return;
   }
-  taggedMode = false; negCandidateMode = false; borderlineMode = false;
+  taggedMode = false; negCandidateMode = false; borderlineMode = false; scanLowConfMode = false;
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
@@ -311,10 +311,12 @@ function toggleSelect(e, id) {
 function updateSelUI() {
   const n = selectedIds.size;
   document.getElementById('selCount').textContent = n ? `${n} selected` : '';
-  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode && !negCandidateMode) ? '' : 'none';
+  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode && !negCandidateMode && !scanLowConfMode) ? '' : 'none';
   document.getElementById('skipBtn').style.display = (n && !taggedMode) ? '' : 'none';
-  document.getElementById('addNegBtn').style.display = (n && !taggedMode) ? '' : 'none';
+  document.getElementById('addNegBtn').style.display = (n && !taggedMode && !scanLowConfMode) ? '' : 'none';
   document.getElementById('rejectBtn').style.display = (n && taggedMode) ? '' : 'none';
+  document.getElementById('scanPetBtns').style.display = (n && scanLowConfMode) ? 'flex' : 'none';
+  document.getElementById('scanNegBtn').style.display = (n && scanLowConfMode) ? '' : 'none';
 }
 
 async function skipSelected() {
@@ -533,8 +535,70 @@ function showScanResult(r) {
       stat('Already tagged', c.already_tagged, '') +
       (c.failed > 0 ? stat('Failed', c.failed, 'nonzero-bad') : '') +
       (c.no_thumb > 0 ? stat('No thumb', c.no_thumb, 'nonzero-warn') : '') +
-      '</div>';
+      '</div>' +
+      (c.low_confidence > 0 ? `<button class="btn" style="font-size:11px;margin-top:8px;width:100%;" onclick="viewScanLowConf()">Review ${c.low_confidence} low confidence</button>` : '');
   }
+}
+
+async function viewScanLowConf() {
+  scanLowConfMode = true;
+  taggedMode = false; negCandidateMode = false; borderlineMode = false;
+  selectedIds.clear(); lastClickedId = null;
+  const grid = document.getElementById('photoGrid');
+  const label = document.getElementById('resultsLabel');
+  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Loading low confidence results…</div>';
+  label.textContent = 'Loading…';
+  const scanPetBtns = document.getElementById('scanPetBtns');
+  scanPetBtns.innerHTML = pets.map(p => `<button class="btn btn-primary" style="font-size:11px; padding:4px 10px;">${p.name}</button>`).join('');
+  [...scanPetBtns.children].forEach((btn, i) => { btn.onclick = () => scanAssignSelected(pets[i].name); });
+  updateSelUI();
+  try {
+    const d = await api('/api/scan/low-confidence');
+    if (!d.assets.length) {
+      label.textContent = 'No low confidence results';
+      grid.innerHTML = '<div class="empty" style="grid-column:1/-1; height:200px;"><div class="empty-sub">All results were confident or unknown</div></div>';
+      return;
+    }
+    label.textContent = `${d.assets.length} low confidence result${d.assets.length !== 1 ? 's' : ''}`;
+    const negSet = new Set(negIds);
+    grid.innerHTML = d.assets.map(a => `
+      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${fmtDate(a.date)} · ${Math.round(a.prob * 100)}% ${a.pet_name}">
+        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
+        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
+        <div class="score-badge nonzero-warn">${Math.round(a.prob * 100)}%</div>
+        <div class="photo-check">✓</div>
+      </div>`).join('');
+    d.assets.forEach(a => { if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg'); });
+  } catch(e) {
+    label.textContent = 'Failed to load';
+    grid.innerHTML = `<div class="empty" style="grid-column:1/-1; height:200px;"><div class="empty-sub">${e.message}</div></div>`;
+  }
+}
+
+async function scanAssignSelected(petName) {
+  if (!selectedIds.size) return;
+  const ids = [...selectedIds];
+  try {
+    const existing = await api(`/api/pets/${encodeURIComponent(petName)}/assets`);
+    const merged = [...new Set([...existing.assets.map(a => a.id), ...ids])];
+    await api(`/api/pets/${encodeURIComponent(petName)}/assets`, { method: 'POST', body: { asset_ids: merged } });
+    ids.forEach(id => { const el = document.getElementById('th-' + id); if (el) { el.classList.remove('selected'); el.classList.add('is-ref'); } });
+    selectedIds.clear(); updateSelUI();
+    await refreshState();
+    toast(`Added ${ids.length} to ${petName}`, 'success');
+  } catch(e) { toast(e.message, 'error'); }
+}
+
+async function scanNegSelected() {
+  if (!selectedIds.size) return;
+  const ids = [...selectedIds];
+  try {
+    await api('/api/negatives', { method: 'POST', body: { asset_ids: ids } });
+    ids.forEach(id => { const el = document.getElementById('th-' + id); if (el) { el.classList.remove('selected'); el.classList.add('is-neg'); } });
+    selectedIds.clear(); updateSelUI();
+    await loadNegatives();
+    toast(`Added ${ids.length} to "not my pets"`, 'success');
+  } catch(e) { toast(e.message, 'error'); }
 }
 
 async function applyTimestamp() {

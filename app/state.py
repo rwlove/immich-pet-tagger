@@ -9,6 +9,7 @@ neg_request_id: int = 0
 borderline_progress: dict = {"current": 0, "total": 0, "running": False}
 borderline_request_id: int = 0
 manual_scan_result: dict | None = None
+scan_low_conf_assets: list = []
 
 
 def init():

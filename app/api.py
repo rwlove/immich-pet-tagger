@@ -706,6 +706,8 @@ async def _run_manual_scan(generation: int):
     from poller import run_poll_cycle
     from datetime import datetime, timezone
     state.manual_scan_result = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()}
+    state.scan_low_conf_assets = []
+    low_conf_assets: list = []
 
     def on_date(date_str):
         if isinstance(state.manual_scan_result, dict):
@@ -716,8 +718,9 @@ async def _run_manual_scan(generation: int):
             if state.scan_generation != generation:
                 return
             state.scan_cancel.clear()
-            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date, state.scan_cancel)
+            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date, state.scan_cancel, low_conf_assets)
             if state.scan_generation == generation:
+                state.scan_low_conf_assets = low_conf_assets
                 state.manual_scan_result = data.load_poll_status(DATA_DIR)
     except Exception as e:
         if state.scan_generation == generation:
@@ -727,6 +730,24 @@ async def _run_manual_scan(generation: int):
 @router.get("/scan/result")
 async def get_scan_result():
     return state.manual_scan_result or {"status": "none"}
+
+
+@router.get("/scan/low-confidence")
+async def get_scan_low_confidence():
+    config = data.load_config(DATA_DIR)
+    seen: dict = {}
+    for a in (state.scan_low_conf_assets or []):
+        aid = a["asset_id"]
+        if aid not in seen or a["prob"] > seen[aid]["prob"]:
+            seen[aid] = a
+    return {
+        "assets": [
+            {"id": a["asset_id"], "thumb": f"/api/thumb/{a['asset_id']}",
+             "pet_name": a["pet_name"], "prob": a["prob"], "date": a.get("date", "")}
+            for a in seen.values()
+        ],
+        "pets": list(config.keys()),
+    }
 
 
 # ---------------------------------------------------------------------------

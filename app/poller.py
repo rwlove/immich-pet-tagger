@@ -192,8 +192,6 @@ def build_classifier(
         if len(negative_ids) > target:
             negative_ids = random.sample(negative_ids, target)
             log.info(f"Subsampled negatives to {target} (3x {total_refs} refs)")
-        elif len(negative_ids) < total_refs * 2:
-            log.warning(f"{len(negative_ids)} negatives for {total_refs} refs — aim for {total_refs * 2}-{target} for best accuracy")
 
         log.info(f"Embedding {len(negative_ids)} negative samples...")
         for aid in negative_ids:

@@ -490,34 +490,6 @@ function relativeTime(iso) {
   return `${Math.floor(diff / 86400)}d ago`;
 }
 
-async function loadPollStatus() {
-  try {
-    const d = await api('/api/poll-status');
-    const badge = document.getElementById('pollBadge');
-    const timeEl = document.getElementById('pollTime');
-    const statsEl = document.getElementById('pollStats');
-    badge.className = `poll-badge ${d.status}`;
-    badge.textContent = d.status === 'running' ? 'Scanning...' : d.status === 'error' ? 'Error' : d.status === 'never' ? 'Never run' : 'Idle';
-    if (d.ran_at) timeEl.textContent = relativeTime(d.ran_at);
-    else if (d.started_at) timeEl.textContent = `Started ${relativeTime(d.started_at)}`;
-    else timeEl.textContent = '';
-    if (d.counts) {
-      const c = d.counts;
-      const stat = (label, val, cls) => `<div class="poll-stat"><span class="poll-stat-label">${label}</span><span class="poll-stat-val ${val > 0 ? cls : ''}">${val}</span></div>`;
-      statsEl.innerHTML =
-        stat('Tagged', c.added, 'nonzero-good') +
-        stat('Low conf.', c.low_confidence, 'nonzero-warn') +
-        stat('Unknown', c.unknown, '') +
-        stat('Out of range', c.out_of_range, '') +
-        stat('Already tagged', c.already_tagged, '') +
-        (c.failed > 0 ? stat('Failed', c.failed, 'nonzero-bad') : '') +
-        (c.no_thumb > 0 ? stat('No thumb', c.no_thumb, 'nonzero-warn') : '');
-    } else {
-      statsEl.innerHTML = '';
-    }
-    if (d.error) timeEl.textContent += (timeEl.textContent ? '. ' : '') + d.error;
-  } catch(e) {}
-}
 
 // ---------------------------------------------------------------------------
 // Scan timestamp
@@ -541,7 +513,9 @@ function showScanResult(r) {
   el.style.display = '';
   const stat = (label, val, cls) => `<div class="poll-stat"><span class="poll-stat-label">${label}</span><span class="poll-stat-val ${val > 0 ? cls : ''}">${val}</span></div>`;
   if (r.status === 'running') {
-    el.innerHTML = '<div class="scan-result-header">Scanning…</div>';
+    const dateStr = r.current_date ? new Date(r.current_date + 'T00:00:00').toLocaleDateString() : '';
+    el.innerHTML = '<div class="scan-result-header">Scanning…</div>' +
+      (dateStr ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;">${dateStr}</div>` : '');
     return;
   }
   if (r.status === 'error') {
@@ -574,7 +548,7 @@ async function applyTimestamp() {
       try {
         const r = await api('/api/scan/result');
         showScanResult(r);
-        if (r.status !== 'running') { clearInterval(iv); loadPollStatus(); }
+        if (r.status !== 'running') { clearInterval(iv); }
       } catch(_) {}
     }, 2000);
   } catch(e) {
@@ -793,7 +767,5 @@ document.getElementById('importDetailModal').addEventListener('click', function(
 (async () => {
   await refreshState();
   loadTimestamp();
-  loadPollStatus();
   loadScanResult();
-  setInterval(loadPollStatus, 30000);
 })();

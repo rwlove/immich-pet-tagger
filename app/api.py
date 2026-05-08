@@ -705,9 +705,14 @@ async def _run_manual_scan():
     from poller import run_poll_cycle
     from datetime import datetime, timezone
     state.manual_scan_result = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()}
+
+    def on_date(date_str):
+        if isinstance(state.manual_scan_result, dict):
+            state.manual_scan_result["current_date"] = date_str
+
     try:
         async with state.scan_lock:
-            await asyncio.to_thread(run_poll_cycle, DATA_DIR)
+            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date)
             state.manual_scan_result = data.load_poll_status(DATA_DIR)
     except Exception as e:
         state.manual_scan_result = {"status": "error", "error": str(e), "ran_at": datetime.now(timezone.utc).isoformat()}

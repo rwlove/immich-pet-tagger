@@ -271,7 +271,7 @@ def post_face(asset_id: str, person_id: str, bbox_norm=None, img_size=None) -> s
 # Main poll cycle
 # ---------------------------------------------------------------------------
 
-def run_poll_cycle(data_dir: str, on_date=None) -> None:
+def run_poll_cycle(data_dir: str, on_date=None, cancel=None) -> None:
     log.info(f"Poll cycle | threshold={THRESHOLD} dry_run={DRY_RUN}")
     dd = Path(data_dir)
     now = datetime.now(timezone.utc).isoformat()
@@ -280,7 +280,7 @@ def run_poll_cycle(data_dir: str, on_date=None) -> None:
     counts = {"added": 0, "low_confidence": 0, "unknown": 0,
               "out_of_range": 0, "already_tagged": 0, "failed": 0, "no_thumb": 0}
     try:
-        _run_poll_cycle(dd, counts, on_date)
+        _run_poll_cycle(dd, counts, on_date, cancel)
     except Exception as e:
         data.write_poll_status(dd, {"status": "error", "ran_at": datetime.now(timezone.utc).isoformat(), "error": str(e), "counts": counts})
         raise
@@ -288,7 +288,7 @@ def run_poll_cycle(data_dir: str, on_date=None) -> None:
         data.write_poll_status(dd, {"status": "idle", "ran_at": datetime.now(timezone.utc).isoformat(), "counts": counts})
 
 
-def _run_poll_cycle(dd: Path, counts: dict, on_date=None) -> None:
+def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None) -> None:
     config = data.load_config(dd)
     if not config:
         log.warning("config.json empty or missing, no pets configured yet.")
@@ -335,6 +335,10 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None) -> None:
     for aid, time_str in assets:
         if time_str > latest_ts:
             latest_ts = time_str
+
+        if cancel and cancel.is_set():
+            log.info("Scan cancelled.")
+            return
 
         if on_date:
             on_date(time_str[:10])

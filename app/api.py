@@ -694,13 +694,14 @@ async def set_timestamp(body: TimestampBody):
 @router.post("/scan")
 async def trigger_scan():
     import state
-    if state.scan_lock is None or state.scan_lock.locked():
-        raise HTTPException(status_code=409, detail="Scan already in progress")
-    asyncio.create_task(_run_manual_scan())
+    if state.scan_lock is not None and state.scan_lock.locked():
+        state.scan_cancel.set()
+    state.scan_generation += 1
+    asyncio.create_task(_run_manual_scan(state.scan_generation))
     return {"status": "started"}
 
 
-async def _run_manual_scan():
+async def _run_manual_scan(generation: int):
     import state
     from poller import run_poll_cycle
     from datetime import datetime, timezone
@@ -712,10 +713,15 @@ async def _run_manual_scan():
 
     try:
         async with state.scan_lock:
-            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date)
-            state.manual_scan_result = data.load_poll_status(DATA_DIR)
+            if state.scan_generation != generation:
+                return
+            state.scan_cancel.clear()
+            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date, state.scan_cancel)
+            if state.scan_generation == generation:
+                state.manual_scan_result = data.load_poll_status(DATA_DIR)
     except Exception as e:
-        state.manual_scan_result = {"status": "error", "error": str(e), "ran_at": datetime.now(timezone.utc).isoformat()}
+        if state.scan_generation == generation:
+            state.manual_scan_result = {"status": "error", "error": str(e), "ran_at": datetime.now(timezone.utc).isoformat()}
 
 
 @router.get("/scan/result")

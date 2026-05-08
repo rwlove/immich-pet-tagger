@@ -552,8 +552,7 @@ async function applyTimestamp() {
       } catch(_) {}
     }, 2000);
   } catch(e) {
-    const msg = e.message.includes('409') || e.message.includes('already') ? 'Scan already in progress' : e.message;
-    toast(msg, 'error');
+    toast(e.message, 'error');
   }
 }
 

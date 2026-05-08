@@ -1,6 +1,9 @@
 import asyncio
+import threading
 
 scan_lock: asyncio.Lock | None = None
+scan_cancel: threading.Event = threading.Event()
+scan_generation: int = 0
 neg_progress: dict = {"current": 0, "total": 0, "running": False}
 neg_request_id: int = 0
 borderline_progress: dict = {"current": 0, "total": 0, "running": False}

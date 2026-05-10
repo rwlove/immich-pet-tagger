@@ -25,10 +25,13 @@ _yolo = None
 def get_yolo():
     global _yolo
     if _yolo is None:
+        import torch
         from ultralytics import YOLO
-        log.info("Loading YOLOv8n model...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        log.info(f"Loading YOLOv8n model on {device}...")
         _yolo = YOLO("yolov8n.pt")
-        log.info("YOLO loaded")
+        _yolo.to(device)
+        log.info(f"YOLO loaded on {device}")
     return _yolo
 
 

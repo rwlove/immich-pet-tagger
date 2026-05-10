@@ -31,6 +31,12 @@ async function loadPets(keepActive = false) {
   try {
     const d = await api('/api/pets');
     pets = d.pets;
+    if (activePet) {
+      activePet = pets.find(p => p.name === activePet.name) || activePet;
+      const hasRefs = activePet.ref_count > 0;
+      const bb = document.getElementById('borderlineBtn');
+      if (bb) { bb.disabled = !hasRefs; bb.title = hasRefs ? '' : 'Add refs first'; }
+    }
     renderSidebar();
     updateNegStatus();
     if (!keepActive && !activePet && pets.length > 0) await selectPet(pets[0].name);

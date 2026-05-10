@@ -706,10 +706,8 @@ let _petToDelete = null;
 
 function openDeletePet(name) {
   _petToDelete = name;
-  const p = pets.find(p => p.name === name);
-  const refs = p ? p.ref_count : 0;
   document.getElementById('deleteWarningText').textContent =
-    `"Delete from Immich too" removes the person and untags all ${refs} photo${refs !== 1 ? 's' : ''} in Immich permanently. Your photos are not deleted.`;
+    `"Delete from Immich too" removes the person and untags all tagged photos in Immich permanently. Your photos are not deleted.`;
   document.getElementById('deleteLocalOnlyText').textContent =
     `"Remove from tool only" keeps ${name} in Immich with all tagged photos intact, but stops auto-tagging new photos. Your photos are not deleted. You can re-import it later.`;
   document.getElementById('deletePetModal').classList.add('open');

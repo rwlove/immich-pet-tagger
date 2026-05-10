@@ -35,7 +35,7 @@ async def polling_loop():
         try:
             log.info("Starting poll cycle...")
             async with state.scan_lock:
-                await asyncio.to_thread(run_poll_cycle, DATA_DIR)
+                await asyncio.to_thread(run_poll_cycle, DATA_DIR, None, state.scan_cancel)
             log.info("Poll cycle complete.")
         except Exception as e:
             log.exception(f"Poll cycle failed: {e}")

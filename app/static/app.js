@@ -522,8 +522,16 @@ function showScanResult(r) {
   const stat = (label, val, cls) => `<div class="poll-stat"><span class="poll-stat-label">${label}</span><span class="poll-stat-val ${val > 0 ? cls : ''}">${val}</span></div>`;
   if (r.status === 'running') {
     const dateStr = r.current_date ? new Date(r.current_date + 'T00:00:00').toLocaleDateString() : '';
+    const c = r.counts || {};
     el.innerHTML = '<div class="scan-result-header">Scanning…</div>' +
-      (dateStr ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;">${dateStr}</div>` : '');
+      (dateStr ? `<div style="font-size:11px;color:var(--text3);margin-top:4px;">${dateStr}</div>` : '') +
+      '<div class="poll-stats" style="margin-top:6px;">' +
+      stat('Tagged', c.added || 0, 'nonzero-good') +
+      stat('Low conf.', c.low_confidence || 0, 'nonzero-warn') +
+      stat('Unknown', c.unknown || 0, '') +
+      stat('Already tagged', c.already_tagged || 0, '') +
+      (c.failed > 0 ? stat('Failed', c.failed, 'nonzero-bad') : '') +
+      '</div>';
     return;
   }
   if (r.status === 'error') {

@@ -269,14 +269,15 @@ def post_face(asset_id: str, person_id: str, bbox_norm=None, img_size=None) -> s
 # Main poll cycle
 # ---------------------------------------------------------------------------
 
-def run_poll_cycle(data_dir: str, on_date=None, cancel=None, low_conf_out=None) -> None:
+def run_poll_cycle(data_dir: str, on_date=None, cancel=None, low_conf_out=None, live_counts: dict | None = None) -> None:
     log.info(f"Poll cycle | threshold={THRESHOLD} dry_run={DRY_RUN}")
     dd = Path(data_dir)
     now = datetime.now(timezone.utc).isoformat()
     data.write_poll_status(dd, {"status": "running", "started_at": now})
 
-    counts = {"added": 0, "low_confidence": 0, "unknown": 0,
-              "out_of_range": 0, "already_tagged": 0, "failed": 0, "no_thumb": 0}
+    counts = live_counts if live_counts is not None else {}
+    for k in ("added", "low_confidence", "unknown", "out_of_range", "already_tagged", "failed", "no_thumb"):
+        counts[k] = 0
     try:
         _run_poll_cycle(dd, counts, on_date, cancel, low_conf_out)
     except Exception as e:

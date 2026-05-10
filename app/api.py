@@ -698,7 +698,8 @@ async def _run_manual_scan(generation: int):
     import state
     from poller import run_poll_cycle
     from datetime import datetime, timezone
-    state.manual_scan_result = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()}
+    live_counts: dict = {}
+    state.manual_scan_result = {"status": "running", "started_at": datetime.now(timezone.utc).isoformat(), "counts": live_counts}
     state.scan_low_conf_assets = []
     low_conf_assets: list = []
 
@@ -711,7 +712,7 @@ async def _run_manual_scan(generation: int):
             if state.scan_generation != generation:
                 return
             state.scan_cancel.clear()
-            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date, state.scan_cancel, low_conf_assets)
+            await asyncio.to_thread(run_poll_cycle, DATA_DIR, on_date, state.scan_cancel, low_conf_assets, live_counts)
             if state.scan_generation == generation:
                 state.scan_low_conf_assets = low_conf_assets
                 state.manual_scan_result = data.load_poll_status(DATA_DIR)

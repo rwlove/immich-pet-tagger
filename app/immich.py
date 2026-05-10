@@ -45,7 +45,7 @@ def fetch_assets_taken_after(taken_after_iso: str) -> list[tuple[str, str]]:
                 ts = a.get("fileCreatedAt") or a.get("localDateTime") or ""
                 if aid and ts:
                     out.append((str(aid).strip("\x00"), ts))
-            if len(items) < size or len(out) >= total:
+            if len(items) < size:
                 break
             page += 1
         except Exception as e:
@@ -88,7 +88,7 @@ async def post_face(client: httpx.AsyncClient, asset_id: str, person_id: str) ->
         faces_resp = await client.get(f"{IMMICH_URL}/api/faces", headers=headers(), params={"id": asset_id})
         if faces_resp.status_code == 200:
             for face in faces_resp.json():
-                if face.get("person", {}).get("id") == person_id:
+                if (face.get("person") or {}).get("id") == person_id:
                     return face.get("id")
         log.warning(f"post_face: created but could not retrieve face_id for asset {asset_id}")
         return None

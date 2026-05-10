@@ -256,7 +256,7 @@ def post_face(asset_id: str, person_id: str, bbox_norm=None, img_size=None) -> s
         fr = requests.get(f"{imm.IMMICH_URL}/api/faces", headers=imm.headers(), params={"id": asset_id}, timeout=15)
         if fr.status_code == 200:
             for face in fr.json():
-                if face.get("person", {}).get("id") == person_id:
+                if (face.get("person") or {}).get("id") == person_id:
                     return face.get("id")
         log.warning(f"post_face: created but could not retrieve face_id for asset {asset_id}")
         return None
@@ -349,6 +349,8 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
         crops = crop_animals(img)
         if not crops:
             crops = [(None, img)]
+        elif len(crops) > 1:
+            log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
 
         existing_persons = imm.fetch_asset_face_person_ids(aid)
         tagged_in_photo: set[str] = set()

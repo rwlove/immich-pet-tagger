@@ -362,7 +362,7 @@ async def reject_tagged_assets(name: str, body: PetAssets):
             faces_resp = await client.get(f"{imm.IMMICH_URL}/api/faces", headers=imm.headers(), params={"id": asset_id})
             if faces_resp.status_code == 200:
                 for face in faces_resp.json():
-                    if face.get("person", {}).get("id") == person_id:
+                    if (face.get("person") or {}).get("id") == person_id:
                         await client.request("DELETE", f"{imm.IMMICH_URL}/api/faces/{face.get('id')}", headers=imm.headers(), json={"force": True})
                         removed += 1
                         break

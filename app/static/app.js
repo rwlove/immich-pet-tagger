@@ -727,7 +727,7 @@ async function confirmDeletePet(localOnly) {
       document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Select a pet</div></div>';
     }
     await refreshState();
-    toast(localOnly ? `Removed ${name} from tool` : `Deleted ${name}`, 'success');
+    toast(localOnly ? `Removed ${name} from tool` : `Deleted ${name}. Immich will clean up faces in the background.`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 

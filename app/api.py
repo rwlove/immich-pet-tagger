@@ -188,17 +188,10 @@ async def delete_pet(name: str, local_only: bool = False):
 
     if not local_only and person_id:
         async with httpx.AsyncClient(timeout=30) as client:
-            for ref in data.load_pet_refs(name, DATA_DIR):
-                face_id = ref.get("face_id")
-                if face_id:
-                    resp_face = await client.request("DELETE", f"{imm.IMMICH_URL}/api/faces/{face_id}", headers=imm.headers(), json={"force": True})
-                    log.info(f"Deleted face {face_id} on asset {ref.get('asset_id')} (status={resp_face.status_code})")
-                else:
-                    log.warning(f"No stored face_id for asset {ref.get('asset_id')}, skipping face deletion")
             resp = await client.delete(f"{imm.IMMICH_URL}/api/people/{person_id}", headers=imm.headers())
         if resp.status_code not in (200, 204):
             raise HTTPException(status_code=resp.status_code, detail=f"Immich error: {resp.text}")
-        log.info(f"Deleted Immich person {person_id} for pet '{name}'")
+        log.info(f"Deleted Immich person {person_id} for pet '{name}', face cleanup running in background")
 
     del config[name]
     data.save_config(config, DATA_DIR)
@@ -512,7 +505,7 @@ async def get_borderline(name: str, limit: int = 40):
                     pet_prob = float(clf.predict_proba(scaler.transform(v))[0][pet_idx])
                     if LOW <= pet_prob < HIGH:
                         scored.append((pet_prob, a))
-            scored.sort(key=lambda x: x[0], reverse=True)
+            scored.sort(key=lambda x: x[0])
             return scored[:limit]
         finally:
             if state.borderline_request_id == my_id:

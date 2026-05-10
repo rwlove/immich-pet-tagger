@@ -734,13 +734,15 @@ async def get_scan_low_confidence():
         aid = a["asset_id"]
         if aid not in seen or a["prob"] > seen[aid]["prob"]:
             seen[aid] = a
+    sorted_assets = sorted(seen.values(), key=lambda a: a["prob"])
     return {
         "assets": [
             {"id": a["asset_id"], "thumb": f"/api/thumb/{a['asset_id']}",
-             "pet_name": a["pet_name"], "prob": a["prob"], "date": a.get("date", "")}
-            for a in seen.values()
+             "pet_name": a["pet_name"], "score": a["prob"], "date": a.get("date", "")}
+            for a in sorted_assets
         ],
         "pets": list(config.keys()),
+        "threshold": THRESHOLD,
     }
 
 

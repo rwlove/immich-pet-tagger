@@ -574,14 +574,17 @@ async function viewScanLowConf() {
       return;
     }
     label.textContent = `${d.assets.length} low confidence result${d.assets.length !== 1 ? 's' : ''}`;
+    const thr = d.threshold ?? 0.8;
     const negSet = new Set(negIds);
-    grid.innerHTML = d.assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${fmtDate(a.date)} · ${Math.round(a.prob * 100)}% ${a.pet_name}">
+    grid.innerHTML = d.assets.map(a => {
+      const cls = a.score < thr ? 'score-low' : 'score-ok';
+      return `<div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${fmtDate(a.date)} · ${Math.round(a.score * 100)}% ${a.pet_name}">
         <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
         <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
-        <div class="score-badge nonzero-warn">${Math.round(a.prob * 100)}%</div>
         <div class="photo-check">✓</div>
-      </div>`).join('');
+        <div class="score-badge ${cls}">${Math.round(a.score * 100)}%</div>
+      </div>`;
+    }).join('');
     d.assets.forEach(a => { if (negSet.has(a.id)) document.getElementById('th-' + a.id)?.classList.add('is-neg'); });
   } catch(e) {
     label.textContent = 'Failed to load';

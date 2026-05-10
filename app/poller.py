@@ -5,7 +5,9 @@ import logging
 import os
 import pickle
 import random
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,6 +27,10 @@ log = logging.getLogger("poller")
 
 THRESHOLD = float(os.environ.get("THRESHOLD", 0.8))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
+SCAN_WORKERS = int(os.environ.get("SCAN_WORKERS", 8))
+
+_gpu_lock = threading.Lock()
+_count_lock = threading.Lock()
 
 CLIP_MODEL_NAME = os.environ.get("CLIP_MODEL", "ViT-B-16")
 CLIP_PRETRAINED = os.environ.get("CLIP_PRETRAINED", "openai")
@@ -329,14 +335,10 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
         data.save_last_timestamp(datetime.now(timezone.utc).isoformat(), dd)
         return
 
-    latest_ts = last_ts
+    latest_ts = max((ts for _, ts in assets), default=last_ts)
 
-    for aid, time_str in assets:
-        if time_str > latest_ts:
-            latest_ts = time_str
-
+    def process_asset(aid: str, time_str: str) -> None:
         if cancel and cancel.is_set():
-            log.info("Scan cancelled.")
             return
 
         if on_date:
@@ -344,38 +346,43 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
 
         img = fetch_thumbnail(aid)
         if img is None:
-            counts["no_thumb"] += 1
-            continue
+            with _count_lock:
+                counts["no_thumb"] += 1
+            return
 
-        crops = crop_animals(img)
-        if not crops:
-            crops = [(None, img)]
-        elif len(crops) > 1:
-            log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
+        with _gpu_lock:
+            crops = crop_animals(img)
+            if not crops:
+                crops = [(None, img)]
+            elif len(crops) > 1:
+                log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
+            vecs = [(bbox_norm, embed_image(crop)) for bbox_norm, crop in crops]
 
         existing_persons = imm.fetch_asset_face_person_ids(aid)
         tagged_in_photo: set[str] = set()
 
-        for bbox_norm, crop in crops:
-            vec = embed_image(crop)
+        for bbox_norm, vec in vecs:
             if vec is None:
                 continue
 
             pet_name, prob = classify(vec, names, clf, scaler)
 
             if pet_name == "unknown":
-                counts["unknown"] += 1
+                with _count_lock:
+                    counts["unknown"] += 1
                 continue
 
             if prob < THRESHOLD:
-                counts["low_confidence"] += 1
+                with _count_lock:
+                    counts["low_confidence"] += 1
                 if low_conf_out is not None:
                     low_conf_out.append({"asset_id": aid, "pet_name": pet_name, "prob": prob, "date": time_str[:10]})
                 continue
 
             cfg = config.get(pet_name, {})
             if not asset_in_range(time_str, cfg.get("since"), cfg.get("until")):
-                counts["out_of_range"] += 1
+                with _count_lock:
+                    counts["out_of_range"] += 1
                 continue
 
             person_id = cfg.get("person_id")
@@ -384,22 +391,38 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
                 continue
 
             if person_id in existing_persons or person_id in tagged_in_photo:
-                counts["already_tagged"] += 1
+                with _count_lock:
+                    counts["already_tagged"] += 1
                 continue
 
             log.info(f"{imm.IMMICH_URL}/search/photos/{aid} -> {pet_name} ({prob:.3f}) | {time_str[:10]}")
 
             if DRY_RUN:
                 log.info(f"  dry-run: would add {pet_name}")
-                counts["added"] += 1
+                with _count_lock:
+                    counts["added"] += 1
                 tagged_in_photo.add(person_id)
             else:
                 face_id = post_face(aid, person_id, bbox_norm, img.size if bbox_norm is not None else None)
                 tagged_in_photo.add(person_id)
-                if face_id:
-                    counts["added"] += 1
-                else:
-                    counts["failed"] += 1
+                with _count_lock:
+                    if face_id:
+                        counts["added"] += 1
+                    else:
+                        counts["failed"] += 1
+
+    log.info(f"Processing {len(assets)} assets with {SCAN_WORKERS} workers")
+    with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as executor:
+        futures = {executor.submit(process_asset, aid, ts): aid for aid, ts in assets}
+        for future in as_completed(futures):
+            if cancel and cancel.is_set():
+                executor.shutdown(wait=False, cancel_futures=True)
+                log.info("Scan cancelled.")
+                return
+            try:
+                future.result()
+            except Exception as e:
+                log.warning(f"Asset {futures[future]} failed: {e}")
 
     log.info(f"Summary: {counts}")
 

@@ -10,11 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ARG CUDA=false
 RUN if [ "$CUDA" = "true" ]; then \
       pip install --no-cache-dir \
-        torch==2.6.0+cu126 \
-        torchvision==0.21.0+cu126 \
-        --extra-index-url https://download.pytorch.org/whl/cu126; \
+        torch==2.7.0+cu128 \
+        torchvision==0.22.0+cu128 \
+        --extra-index-url https://download.pytorch.org/whl/cu128; \
     else \
-      pip install --no-cache-dir torch==2.6.0 torchvision==0.21.0; \
+      pip install --no-cache-dir torch==2.7.0 torchvision==0.22.0; \
     fi
 
 COPY requirements.txt .

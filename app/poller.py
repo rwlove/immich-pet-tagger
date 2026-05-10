@@ -392,9 +392,9 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
                 tagged_in_photo.add(person_id)
             else:
                 face_id = post_face(aid, person_id, bbox_norm, img.size if bbox_norm is not None else None)
+                tagged_in_photo.add(person_id)
                 if face_id:
                     counts["added"] += 1
-                    tagged_in_photo.add(person_id)
                 else:
                     counts["failed"] += 1
 

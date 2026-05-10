@@ -684,9 +684,12 @@ async def get_scan_result():
 async def get_scan_low_confidence():
     from poller import THRESHOLD
     config = data.load_config(DATA_DIR)
+    skipped = set(data.load_skipped_ids(DATA_DIR))
     seen: dict = {}
     for a in (state.scan_low_conf_assets or []):
         aid = a["asset_id"]
+        if aid in skipped:
+            continue
         if aid not in seen or a["prob"] > seen[aid]["prob"]:
             seen[aid] = a
     sorted_assets = sorted(seen.values(), key=lambda a: a["prob"])

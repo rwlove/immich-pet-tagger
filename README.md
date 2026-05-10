@@ -106,6 +106,15 @@ If Immich already recognizes your pet as a person (from its own face detection):
 3. Select good reference photos and click **Add to pet**
 4. Aim for 10–20 references showing different angles, lighting, and distances
 
+### Picking good reference photos
+
+Good references are the single biggest factor in accuracy. When selecting refs:
+
+- **Skip photos with multiple pets**: YOLO crops to the highest-confidence animal, so you can't control which pet gets embedded. Use single-pet photos instead.
+- **Skip blurry or low-light photos**: CLIP embeddings are less reliable when the subject isn't clearly visible.
+- **Skip uncertain ones**: if you're not sure whether it's your pet, skip it. Noise in refs hurts more than a smaller ref count.
+- **Vary the shots**: different angles, distances, and lighting conditions generalize better than many similar-looking photos.
+
 ### Adding negative samples
 
 Negative samples help the classifier reject photos that look like your pet but aren't. More negatives = fewer false positives.
@@ -144,7 +153,7 @@ By default the poller only processes photos taken after the container first star
 
 ## Limitations
 
-- **One pet per photo**: when multiple pets appear in the same photo, only the highest-confidence match is tagged
+- **YOLO fallback**: when no animals are detected by YOLO, the full image is classified as a whole and only one pet can be tagged per photo
 - **Polling only**: photos are processed within 5 minutes of upload, not instantly
 - **CPU by default**: CLIP runs on CPU. CUDA is used automatically if available in the container
 

@@ -22,8 +22,8 @@ GPU_WORKERS = int(os.environ.get("GPU_WORKERS", 2))
 _default_scan_workers = GPU_WORKERS * 32 if torch.cuda.is_available() else 8
 SCAN_WORKERS = int(os.environ.get("SCAN_WORKERS", _default_scan_workers))
 CLIP_BATCH_SIZE = int(os.environ.get("CLIP_BATCH_SIZE", 32))
-CLIP_MODEL_NAME = os.environ.get("CLIP_MODEL", "ViT-B-16")
-CLIP_PRETRAINED = os.environ.get("CLIP_PRETRAINED", "openai")
+CLIP_MODEL_NAME = "ViT-B-16"
+CLIP_PRETRAINED = "openai"
 
 _embed_cache: dict[str, np.ndarray] = {}
 _cache_path: Path | None = None

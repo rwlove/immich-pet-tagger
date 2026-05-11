@@ -15,8 +15,6 @@ services:
       - POLL_INTERVAL=300
       - GPU_WORKERS=2
       - THRESHOLD=0.8
-      # - CLIP_MODEL=ViT-B-16
-      # - CLIP_PRETRAINED=openai
     # For AMD: replace driver: nvidia with driver: amdgpu
     # For CPU-only: remove the entire deploy section
     deploy:

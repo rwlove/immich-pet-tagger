@@ -17,6 +17,7 @@ from pathlib import Path
 from embedder import load_embed_cache
 from poller import run_poll_cycle
 from api import router as api_router
+import data
 import state
 
 logging.basicConfig(
@@ -43,9 +44,24 @@ async def polling_loop():
         await asyncio.sleep(POLL_INTERVAL)
 
 
+def _migrate_pet_folders(data_dir: Path) -> None:
+    config = data.load_config(data_dir)
+    pets_dir = data_dir / "pets"
+    for name, cfg in config.items():
+        person_id = cfg.get("person_id")
+        if not person_id:
+            continue
+        old_dir = pets_dir / name
+        new_dir = pets_dir / person_id
+        if old_dir.exists() and not new_dir.exists():
+            old_dir.rename(new_dir)
+            log.info(f"Migrated pet folder: '{name}' -> {person_id}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state.init()
+    _migrate_pet_folders(Path(DATA_DIR))
     load_embed_cache(Path(DATA_DIR))
     task = asyncio.create_task(polling_loop())
     yield

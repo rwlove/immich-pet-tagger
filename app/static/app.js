@@ -582,7 +582,6 @@ async function submitAddPet() {
   clearModalError('addPetError');
   const name = document.getElementById('petName').value.trim();
   if (!name) { modalError('addPetError', 'Name cannot be empty'); return; }
-  if (/[\/\\.]/.test(name)) { modalError('addPetError', 'Name cannot contain / \\ or .'); return; }
   const description = document.getElementById('petDescription').value.trim();
   if (!description) { modalError('addPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('petSince').value;
@@ -619,7 +618,6 @@ async function submitEditPet() {
   clearModalError('editPetError');
   const name = document.getElementById('editPetName').value.trim();
   if (!name) { modalError('editPetError', 'Name cannot be empty'); return; }
-  if (/[\/\\.]/.test(name)) { modalError('editPetError', 'Name cannot contain / \\ or .'); return; }
   const description = document.getElementById('editPetDescription').value.trim();
   if (!description) { modalError('editPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('editPetSince').value;

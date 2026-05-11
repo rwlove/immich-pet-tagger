@@ -74,7 +74,7 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
         return
 
     all_pet_names = list(config.keys())
-    all_ref_ids = {name: data.load_pet_asset_ids(name, dd) for name in all_pet_names}
+    all_ref_ids = {name: data.load_pet_asset_ids(config[name].get("person_id") or name, dd) for name in all_pet_names}
 
     pet_names = [n for n in all_pet_names if all_ref_ids.get(n)]
     ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}

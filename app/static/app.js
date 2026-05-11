@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', taggedMode = false, negCandidateMode = false, borderlineMode = false, scanLowConfMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', negCandidateMode = false, borderlineMode = false, scanLowConfMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -33,9 +33,6 @@ async function loadPets(keepActive = false) {
     pets = d.pets;
     if (activePet) {
       activePet = pets.find(p => p.name === activePet.name) || activePet;
-      const hasRefs = activePet.ref_count > 0;
-      const bb = document.getElementById('borderlineBtn');
-      if (bb) { bb.disabled = !hasRefs; bb.title = hasRefs ? '' : 'Add refs first'; }
     }
     renderSidebar();
     updateNegStatus();
@@ -47,10 +44,9 @@ function renderSidebar() {
   const el = document.getElementById('petsList');
   if (!pets.length) {
     el.innerHTML = '<div style="padding:16px;font-size:12px;color:var(--text3);text-align:center;line-height:1.6;">No pets yet.<br>Add one to get started.</div>';
-    document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">No pets yet</div><div class="empty-sub">Add a pet using the sidebar to get started</div></div>';
+    showGuide();
     document.getElementById('refsTitle').textContent = 'No pet selected';
-    document.getElementById('suggestSection').style.display = 'none';
-    document.getElementById('taggedBtn').style.display = 'none';
+    document.getElementById('findRefsBtn').style.display = 'none';
     document.getElementById('clearRefsBtn').style.display = 'none';
     document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Add a pet first</div></div>';
     return;
@@ -67,9 +63,24 @@ function renderSidebar() {
     </div>`).join('');
 }
 
+function showGuide() {
+  document.getElementById('resultsLabel').textContent = '';
+  document.getElementById('photoGrid').innerHTML = `<div class="guide" style="grid-column:1/-1">
+    <div class="guide-steps">
+      <div class="guide-step"><div class="guide-step-num">1</div><div class="guide-step-body"><div class="guide-step-title">Add your pet</div><div class="guide-step-desc">Click <strong>↓ Import from Immich</strong> if Immich already recognizes your pet as a person. Otherwise click <strong>+ Add pet</strong> to start from scratch.</div></div></div>
+      <div class="guide-step"><div class="guide-step-num">2</div><div class="guide-step-body"><div class="guide-step-title">Find reference photos</div><div class="guide-step-desc">Select your pet and click <strong>Find references</strong>. Browse the results and add 10–20 clear, varied photos. Avoid blurry shots and frames with multiple animals.</div></div></div>
+      <div class="guide-step"><div class="guide-step-num">3</div><div class="guide-step-body"><div class="guide-step-title">Add "not my pets" samples</div><div class="guide-step-desc">In the <strong>Not my pets</strong> panel, click <strong>Find candidates</strong>. Mark photos that look similar to your pet but are not. Aim for 2–3 times as many negatives as references.</div></div></div>
+      <div class="guide-step"><div class="guide-step-num">4</div><div class="guide-step-body"><div class="guide-step-title">Run a test scan</div><div class="guide-step-desc">Set the <strong>Scan from</strong> date 1–2 weeks back and click <strong>Scan</strong>. Review low confidence results: add correct ones as refs, mark wrong ones as not my pets.</div></div></div>
+      <div class="guide-step"><div class="guide-step-num">5</div><div class="guide-step-body"><div class="guide-step-title">Iterate</div><div class="guide-step-desc">Repeat steps 2–4 a couple of times. Results typically stabilize after 2–3 rounds.</div></div></div>
+      <div class="guide-step"><div class="guide-step-num">6</div><div class="guide-step-body"><div class="guide-step-title">Run the full backfill</div><div class="guide-step-desc">Once happy with accuracy, set the scan date to when you got your pet and run the full scan. After that, new photos are tagged automatically every 5 minutes.</div></div></div>
+    </div>
+  </div>`;
+  selectedIds.clear(); lastClickedId = null; updateSelUI();
+}
+
 function clearSearch() {
   document.getElementById('resultsLabel').textContent = '';
-  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">Find photos</div><div class="empty-sub">Click Similar to find photos matching this pet</div></div>';
+  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">Find photos</div><div class="empty-sub">Click "Find references" to get started</div></div>';
   selectedIds.clear(); lastClickedId = null; updateSelUI();
 }
 
@@ -79,18 +90,12 @@ async function selectPet(name) {
     const ok = confirm(`You have ${selectedIds.size} selected photo${selectedIds.size !== 1 ? 's' : ''} not yet assigned. Switch anyway?`);
     if (!ok) return;
   }
-  taggedMode = false; negCandidateMode = false; borderlineMode = false; scanLowConfMode = false;
+  negCandidateMode = false; borderlineMode = false; scanLowConfMode = false;
   activePet = pets.find(p => p.name === name);
   clearSearch(); renderSidebar();
   document.getElementById('refsTitle').textContent = name;
-  document.getElementById('suggestSection').style.display = '';
-  document.getElementById('taggedBtn').style.display = '';
-  document.getElementById('taggedBtn').textContent = 'Tagged';
+  document.getElementById('findRefsBtn').style.display = '';
   document.getElementById('clearRefsBtn').style.display = '';
-  const hasRefs = activePet && activePet.ref_count > 0;
-  const bb = document.getElementById('borderlineBtn');
-  bb.disabled = !hasRefs;
-  bb.title = hasRefs ? '' : 'Add refs first';
   await loadRefs(name);
   await loadNegatives();
 }
@@ -106,7 +111,7 @@ async function loadRefs(name) {
 
 function renderRefs(assets) {
   const grid = document.getElementById('refsGrid');
-  if (!assets.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:160px;"><div class="empty-sub">No references yet.<br>Search and add photos.</div></div>'; return; }
+  if (!assets.length) { grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:160px;"><div class="empty-sub">No references yet.<br>Click "Find references" to add some.</div></div>'; return; }
   grid.innerHTML = assets.map(a => `
     <div class="ref-thumb">
       <a href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" title="Open in Immich">
@@ -144,15 +149,20 @@ async function assignSelected() {
 // Ref suggestions
 // ---------------------------------------------------------------------------
 
+function viewFindRefs() {
+  if (!activePet) return;
+  if (activePet.ref_count > 0) viewBorderline();
+  else viewSuggestions();
+}
+
 async function viewSuggestions() {
   if (!activePet) return;
   if (!activePet.description) { toast('Edit this pet and add a description to use this feature', 'error'); return; }
-  taggedMode = false;
   selectedIds.clear(); lastClickedId = null; updateSelUI();
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
   grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding similar photos… this may take a moment</div>';
-  label.textContent = 'Finding similar photos…';
+  label.textContent = 'Finding references…';
   try {
     const d = await api(`/api/pets/${encodeURIComponent(activePet.name)}/suggestions`);
     label.textContent = `${d.assets.length} photo${d.assets.length !== 1 ? 's' : ''} similar to ${activePet.name}'s refs`;
@@ -182,13 +192,13 @@ async function viewBorderline() {
   if (!activePet || !activePet.ref_count) return;
   const myGen = ++blGeneration;
   if (blPollTimer) { clearInterval(blPollTimer); blPollTimer = null; }
-  taggedMode = false; negCandidateMode = false; borderlineMode = true;
+  negCandidateMode = false; borderlineMode = true;
   selectedIds.clear(); lastClickedId = null; updateSelUI();
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
   const petName = activePet.name;
   grid.innerHTML = '<div class="loading" id="blLoadMsg" style="grid-column:1/-1">Loading…</div>';
-  label.textContent = 'Finding missed photos…';
+  label.textContent = 'Finding references…';
 
   blPollTimer = setInterval(async () => {
     if (blGeneration !== myGen) { clearInterval(blPollTimer); blPollTimer = null; return; }
@@ -235,60 +245,6 @@ async function viewBorderline() {
 }
 
 // ---------------------------------------------------------------------------
-// Tagged photos
-// ---------------------------------------------------------------------------
-
-async function viewTagged() {
-  if (!activePet) return;
-  taggedMode = true;
-  selectedIds.clear(); lastClickedId = null;
-  const grid = document.getElementById('photoGrid');
-  const label = document.getElementById('resultsLabel');
-  grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Loading tagged photos...</div>';
-  label.textContent = 'Loading...';
-  updateSelUI();
-  try {
-    const d = await api(`/api/pets/${encodeURIComponent(activePet.name)}/tagged`);
-    label.textContent = `${d.count} photo${d.count !== 1 ? 's' : ''} tagged as ${activePet.name} in Immich`;
-    document.getElementById('taggedBtn').textContent = `Tagged (${d.count})`;
-    if (!d.assets.length) {
-      grid.innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-icon">🐾</div><div class="empty-title">No tagged photos yet</div></div>';
-      return;
-    }
-    grid.innerHTML = d.assets.map(a => `
-      <div class="photo-thumb" id="th-${a.id}" onclick="toggleSelect(event, '${a.id}')" title="${a.filename || a.id} · ${fmtDate(a.date)}">
-        <img src="${a.thumb}" loading="lazy" onerror="this.src='data:image/svg+xml,<svg/>'">
-        <a class="photo-open" href="${immichUrl}/photos/${a.id}" target="_blank" rel="noopener" onclick="event.stopPropagation()">⤢</a>
-        <div class="photo-check">✓</div>
-      </div>`).join('');
-  } catch(e) {
-    label.textContent = 'Failed to load';
-    grid.innerHTML = `<div class="empty" style="grid-column:1/-1"><div class="empty-sub">${e.message}</div></div>`;
-  }
-}
-
-function exitTaggedMode() {
-  taggedMode = false;
-  selectedIds.clear();
-  updateSelUI();
-  document.getElementById('taggedBtn').textContent = 'Tagged';
-  clearSearch();
-}
-
-async function rejectSelected() {
-  if (!activePet || !selectedIds.size) return;
-  const ids = [...selectedIds];
-  try {
-    await api(`/api/pets/${encodeURIComponent(activePet.name)}/reject`, { method: 'POST', body: { asset_ids: ids } });
-    ids.forEach(id => document.getElementById('th-' + id)?.remove());
-    selectedIds.clear(); updateSelUI();
-    await loadNegatives();
-    const remaining = document.querySelectorAll('#photoGrid .photo-thumb').length;
-    document.getElementById('resultsLabel').textContent = `${remaining} photo${remaining !== 1 ? 's' : ''} tagged as ${activePet.name} in Immich`;
-    document.getElementById('taggedBtn').textContent = `Tagged (${remaining})`;
-    toast(`Removed ${ids.length} tag${ids.length !== 1 ? 's' : ''} and added to "not my pets"`, 'success');
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
-}
 
 function toggleSelect(e, id) {
   const el = document.getElementById('th-' + id); if (!el) return;
@@ -317,12 +273,10 @@ function toggleSelect(e, id) {
 function updateSelUI() {
   const n = selectedIds.size;
   document.getElementById('selCount').textContent = n ? `${n} selected` : '';
-  document.getElementById('assignBtn').style.display = (n && activePet && !taggedMode && !negCandidateMode && !scanLowConfMode) ? '' : 'none';
-  document.getElementById('skipBtn').style.display = (n && !taggedMode) ? '' : 'none';
-  document.getElementById('addNegBtn').style.display = (n && !taggedMode && !scanLowConfMode) ? '' : 'none';
-  document.getElementById('rejectBtn').style.display = (n && taggedMode) ? '' : 'none';
+  document.getElementById('assignBtn').style.display = (n && activePet && !negCandidateMode && !scanLowConfMode) ? '' : 'none';
+  document.getElementById('skipBtn').style.display = n ? '' : 'none';
+  document.getElementById('addNegBtn').style.display = n ? '' : 'none';
   document.getElementById('scanPetBtns').style.display = (n && scanLowConfMode) ? 'flex' : 'none';
-  document.getElementById('scanNegBtn').style.display = (n && scanLowConfMode) ? '' : 'none';
 }
 
 async function skipSelected() {
@@ -449,7 +403,7 @@ async function viewNegCandidates() {
 
 async function clearAllRefs() {
   if (!activePet) return;
-  if (!confirm(`Remove all reference photos for ${activePet.name} from this tool? This will not affect Immich.`)) return;
+  if (!confirm(`Remove all reference photos for ${activePet.name} from Pet Tagger? This will not affect Immich.`)) return;
   try {
     await api(`/api/pets/${encodeURIComponent(activePet.name)}/refs`, { method: 'DELETE' });
     refsIds = [];
@@ -460,7 +414,7 @@ async function clearAllRefs() {
 }
 
 async function clearAllNegatives() {
-  if (!confirm(`Remove all "not my pets" photos from this tool? This will not affect Immich.`)) return;
+  if (!confirm(`Remove all "not my pets" photos from Pet Tagger? This will not affect Immich.`)) return;
   try {
     await api('/api/negatives/all', { method: 'DELETE' });
     negIds = []; lastNegTopScore = null;
@@ -563,7 +517,7 @@ async function viewScanLowConf() {
   grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Loading low confidence results…</div>';
   label.textContent = 'Loading…';
   const scanPetBtns = document.getElementById('scanPetBtns');
-  scanPetBtns.innerHTML = pets.map(p => `<button class="btn btn-primary" style="font-size:11px; padding:4px 10px;">${p.name}</button>`).join('');
+  scanPetBtns.innerHTML = pets.map(p => `<button class="btn btn-primary">${p.name}</button>`).join('');
   [...scanPetBtns.children].forEach((btn, i) => { btn.onclick = () => scanAssignSelected(pets[i].name); });
   updateSelUI();
   try {
@@ -606,18 +560,6 @@ async function scanAssignSelected(petName) {
   } catch(e) { toast(e.message, 'error'); }
 }
 
-async function scanNegSelected() {
-  if (!selectedIds.size) return;
-  const ids = [...selectedIds];
-  try {
-    await api('/api/negatives', { method: 'POST', body: { asset_ids: ids } });
-    ids.forEach(id => { const el = document.getElementById('th-' + id); if (el) { el.classList.remove('selected'); el.classList.add('is-neg'); } });
-    selectedIds.clear(); updateSelUI();
-    await loadNegatives();
-    toast(`Added ${ids.length} to "not my pets"`, 'success');
-  } catch(e) { toast(e.message, 'error'); }
-}
-
 async function applyTimestamp() {
   const val = document.getElementById('scanDate').value;
   if (!val) { toast('Pick a date first', 'error'); return; }
@@ -655,7 +597,6 @@ async function submitAddPet() {
   clearModalError('addPetError');
   const name = document.getElementById('petName').value.trim();
   if (!name) { modalError('addPetError', 'Name cannot be empty'); return; }
-  if (/[\/\\.]/.test(name)) { modalError('addPetError', 'Name cannot contain / \\ or .'); return; }
   const description = document.getElementById('petDescription').value.trim();
   if (!description) { modalError('addPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('petSince').value;
@@ -692,7 +633,6 @@ async function submitEditPet() {
   clearModalError('editPetError');
   const name = document.getElementById('editPetName').value.trim();
   if (!name) { modalError('editPetError', 'Name cannot be empty'); return; }
-  if (/[\/\\.]/.test(name)) { modalError('editPetError', 'Name cannot contain / \\ or .'); return; }
   const description = document.getElementById('editPetDescription').value.trim();
   if (!description) { modalError('editPetError', 'Description is required'); return; }
   const sinceRaw = document.getElementById('editPetSince').value;
@@ -720,7 +660,7 @@ function openDeletePet(name) {
   document.getElementById('deleteWarningText').textContent =
     `"Delete from Immich too" removes the person and untags all tagged photos in Immich permanently. Your photos are not deleted.`;
   document.getElementById('deleteLocalOnlyText').textContent =
-    `"Remove from tool only" keeps ${name} in Immich with all tagged photos intact, but stops auto-tagging new photos. Your photos are not deleted. You can re-import it later.`;
+    `"Remove from Pet Tagger only" keeps ${name} in Immich with all tagged photos intact, but stops auto-tagging new photos. Your photos are not deleted. You can re-import it later.`;
   document.getElementById('deletePetModal').classList.add('open');
 }
 function closeDeleteModal() { document.getElementById('deletePetModal').classList.remove('open'); _petToDelete = null; }
@@ -738,7 +678,7 @@ async function confirmDeletePet(localOnly) {
       document.getElementById('refsGrid').innerHTML = '<div class="empty" style="grid-column:1/-1;height:200px;"><div class="empty-sub">Select a pet</div></div>';
     }
     await refreshState();
-    toast(localOnly ? `Removed ${name} from tool` : `Deleted ${name}. Immich will clean up faces in the background.`, 'success');
+    toast(localOnly ? `Removed ${name} from Pet Tagger` : `Deleted ${name}. Immich will clean up faces in the background.`, 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 

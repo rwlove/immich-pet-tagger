@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from pathlib import Path
-from poller import run_poll_cycle, load_embed_cache
+from embedder import load_embed_cache
+from poller import run_poll_cycle
 from api import router as api_router
 import state
 

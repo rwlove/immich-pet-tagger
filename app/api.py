@@ -18,7 +18,7 @@ from pydantic import BaseModel
 import data
 import immich as imm
 import state
-from poller import embed_asset
+from embedder import embed_asset
 
 log = logging.getLogger("api")
 
@@ -117,7 +117,7 @@ async def list_pets():
     return {"pets": [
         {"name": name, "person_id": cfg.get("person_id"), "since": cfg.get("since"),
          "until": cfg.get("until"), "description": cfg.get("description"),
-         "ref_count": len(data.load_pet_asset_ids(name, DATA_DIR))}
+         "ref_count": len(data.load_pet_asset_ids(cfg.get("person_id") or name, DATA_DIR))}
         for name, cfg in config.items()
     ]}
 
@@ -128,8 +128,6 @@ async def create_pet(pet: PetCreate):
     name = pet.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name cannot be empty")
-    if any(c in name for c in r'/\.'):
-        raise HTTPException(status_code=400, detail="Pet name cannot contain /, \\, or .")
     if name.lower() in {k.lower() for k in config}:
         raise HTTPException(status_code=409, detail=f"Pet '{name}' already exists")
 
@@ -141,7 +139,7 @@ async def create_pet(pet: PetCreate):
     person_id = resp.json().get("id")
     config[name] = {"person_id": person_id, "since": pet.since, "until": pet.until, "description": pet.description}
     data.save_config(config, DATA_DIR)
-    (PETS_DIR / name).mkdir(parents=True, exist_ok=True)
+    (PETS_DIR / person_id).mkdir(parents=True, exist_ok=True)
     log.info(f"Created pet '{name}' with person_id={person_id}")
     return {"name": name, "person_id": person_id}
 
@@ -154,17 +152,12 @@ async def update_pet(name: str, update: PetUpdate):
 
     new_name = update.name.strip() if update.name else None
     if new_name and new_name != name:
-        if any(c in new_name for c in r'/\.'):
-            raise HTTPException(status_code=400, detail="Pet name cannot contain /, \\, or .")
         if new_name.lower() in {k.lower() for k in config if k != name}:
             raise HTTPException(status_code=409, detail=f"Pet '{new_name}' already exists")
         person_id = config[name].get("person_id")
         if person_id:
             async with httpx.AsyncClient(timeout=15) as client:
                 await client.put(f"{imm.IMMICH_URL}/api/people/{person_id}", headers=imm.headers(), json={"name": new_name})
-        old_dir = PETS_DIR / name
-        if old_dir.exists():
-            old_dir.rename(PETS_DIR / new_name)
         config[new_name] = config.pop(name)
         name = new_name
 
@@ -195,7 +188,7 @@ async def delete_pet(name: str, local_only: bool = False):
 
     del config[name]
     data.save_config(config, DATA_DIR)
-    pet_dir = PETS_DIR / name
+    pet_dir = PETS_DIR / (person_id or name)
     if pet_dir.exists():
         shutil.rmtree(pet_dir)
     log.info(f"Deleted pet '{name}' (local_only={local_only})")
@@ -226,7 +219,8 @@ async def clear_pet_refs(name: str):
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
-    data.save_pet_refs(name, [], DATA_DIR)
+    person_id = config[name].get("person_id") or name
+    data.save_pet_refs(person_id, [], DATA_DIR)
     log.info(f"Cleared all refs for pet '{name}' (local only)")
     return {"ok": True}
 
@@ -266,7 +260,8 @@ async def get_pet_assets(name: str):
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
-    asset_ids = data.load_pet_asset_ids(name, DATA_DIR)
+    person_id = config[name].get("person_id") or name
+    asset_ids = data.load_pet_asset_ids(person_id, DATA_DIR)
     return {"assets": [{"id": aid, "thumb": f"/api/thumb/{aid}"} for aid in asset_ids]}
 
 
@@ -276,13 +271,14 @@ async def set_pet_assets(name: str, body: PetAssets):
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
     person_id = config[name].get("person_id")
+    folder_key = person_id or name
 
-    existing_ids = set(data.load_pet_asset_ids(name, DATA_DIR))
+    existing_ids = set(data.load_pet_asset_ids(folder_key, DATA_DIR))
     new_ids = [aid for aid in body.asset_ids if aid not in existing_ids]
     log.info(f"Saving {len(body.asset_ids)} refs for pet '{name}' ({len(new_ids)} new)")
 
     ok = fail = skipped = 0
-    existing_refs = {r["asset_id"]: r.get("face_id") for r in data.load_pet_refs(name, DATA_DIR)}
+    existing_refs = {r["asset_id"]: r.get("face_id") for r in data.load_pet_refs(folder_key, DATA_DIR)}
 
     if person_id and new_ids:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -302,7 +298,7 @@ async def set_pet_assets(name: str, body: PetAssets):
         log.warning(f"Pet '{name}' has no person_id, skipping face assignment")
 
     final_refs = [{"asset_id": aid, "face_id": existing_refs.get(aid)} for aid in body.asset_ids]
-    data.save_pet_refs(name, final_refs, DATA_DIR)
+    data.save_pet_refs(folder_key, final_refs, DATA_DIR)
     return {"ok": True, "count": len(body.asset_ids), "faces_added": ok, "faces_failed": fail}
 
 
@@ -311,8 +307,9 @@ async def remove_pet_asset(name: str, asset_id: str):
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
+    folder_key = config[name].get("person_id") or name
 
-    refs = data.load_pet_refs(name, DATA_DIR)
+    refs = data.load_pet_refs(folder_key, DATA_DIR)
     ref = next((r for r in refs if r["asset_id"] == asset_id), None)
     face_id = ref.get("face_id") if ref else None
 
@@ -323,55 +320,9 @@ async def remove_pet_asset(name: str, asset_id: str):
     else:
         log.warning(f"No stored face_id for asset {asset_id} on pet '{name}', face not removed from Immich")
 
-    data.save_pet_refs(name, [r for r in refs if r["asset_id"] != asset_id], DATA_DIR)
+    data.save_pet_refs(folder_key, [r for r in refs if r["asset_id"] != asset_id], DATA_DIR)
     return {"ok": True}
 
-
-# ---------------------------------------------------------------------------
-# Tagged assets
-# ---------------------------------------------------------------------------
-
-@router.get("/pets/{name}/tagged")
-async def get_tagged_assets(name: str):
-    config = data.load_config(DATA_DIR)
-    if name not in config:
-        raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
-    person_id = config[name].get("person_id")
-    if not person_id:
-        return {"assets": [], "count": 0}
-    async with httpx.AsyncClient(timeout=30) as client:
-        resp = await client.post(f"{imm.IMMICH_URL}/api/search/metadata", headers=imm.headers(), json={"personIds": [person_id], "type": "IMAGE", "size": 1000})
-    if resp.status_code != 200:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    assets = resp.json().get("assets", {}).get("items", [])
-    return {"assets": [_slim_asset(a) for a in assets], "count": len(assets)}
-
-
-@router.post("/pets/{name}/reject")
-async def reject_tagged_assets(name: str, body: PetAssets):
-    config = data.load_config(DATA_DIR)
-    if name not in config:
-        raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
-    person_id = config[name].get("person_id")
-    if not person_id:
-        raise HTTPException(status_code=400, detail="Pet has no person_id")
-
-    removed = 0
-    async with httpx.AsyncClient(timeout=30) as client:
-        for asset_id in body.asset_ids:
-            faces_resp = await client.get(f"{imm.IMMICH_URL}/api/faces", headers=imm.headers(), params={"id": asset_id})
-            if faces_resp.status_code == 200:
-                for face in faces_resp.json():
-                    if (face.get("person") or {}).get("id") == person_id:
-                        await client.request("DELETE", f"{imm.IMMICH_URL}/api/faces/{face.get('id')}", headers=imm.headers(), json={"force": True})
-                        removed += 1
-                        break
-
-    existing = set(data.load_negative_ids(DATA_DIR))
-    merged = list(existing | set(body.asset_ids))
-    data.save_negative_ids(merged, DATA_DIR)
-    log.info(f"Rejected {len(body.asset_ids)} assets for '{name}': {removed} faces removed, {len(merged)-len(existing)} added to negatives")
-    return {"ok": True, "removed": removed}
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +331,7 @@ async def reject_tagged_assets(name: str, body: PetAssets):
 
 @router.get("/pets/{name}/suggestions")
 async def get_suggestions(name: str, limit: int = 20):
-    from poller import build_classifier
+    from classifier import build_classifier
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
@@ -390,7 +341,7 @@ async def get_suggestions(name: str, limit: int = 20):
     if not description:
         raise HTTPException(status_code=400, detail="no_description")
 
-    ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
+    ref_ids = data.load_pet_asset_ids(pet_cfg.get("person_id") or name, DATA_DIR)
     ref_set = set(ref_ids)
     neg_ids = set(data.load_negative_ids(DATA_DIR))
     exclude = ref_set | neg_ids
@@ -420,7 +371,7 @@ async def get_suggestions(name: str, limit: int = 20):
 
     # Stage 2: classify candidates with the same classifier as the poller
     all_pet_names = list(config.keys())
-    all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    all_ref_ids = {n: data.load_pet_asset_ids(config[n].get("person_id") or n, DATA_DIR) for n in all_pet_names}
     pet_names = [n for n in all_pet_names if all_ref_ids.get(n)]
     ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}
     negative_ids = data.load_negative_ids(DATA_DIR)
@@ -449,13 +400,13 @@ async def get_suggestions(name: str, limit: int = 20):
 
 @router.get("/pets/{name}/borderline")
 async def get_borderline(name: str, limit: int = 40):
-    from poller import build_classifier
+    from classifier import build_classifier
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
 
     pet_cfg = config[name]
-    ref_ids = data.load_pet_asset_ids(name, DATA_DIR)
+    ref_ids = data.load_pet_asset_ids(pet_cfg.get("person_id") or name, DATA_DIR)
     if not ref_ids:
         raise HTTPException(status_code=400, detail="no_refs")
 
@@ -471,7 +422,7 @@ async def get_borderline(name: str, limit: int = 40):
         return {"assets": []}
 
     all_pet_names = list(config.keys())
-    all_ref_ids = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    all_ref_ids = {n: data.load_pet_asset_ids(config[n].get("person_id") or n, DATA_DIR) for n in all_pet_names}
     pet_names = [n for n in all_pet_names if all_ref_ids.get(n)]
     ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}
     negative_ids = data.load_negative_ids(DATA_DIR)
@@ -526,11 +477,12 @@ async def get_borderline_progress(name: str):
 
 @router.get("/suggestions/negatives")
 async def get_neg_candidates(limit: int = 60):
-    from poller import build_classifier, THRESHOLD
+    from classifier import build_classifier
+    from poller import THRESHOLD
     config = data.load_config(DATA_DIR)
 
     all_pet_names = list(config.keys())
-    ref_ids_per_pet = {n: data.load_pet_asset_ids(n, DATA_DIR) for n in all_pet_names}
+    ref_ids_per_pet = {n: data.load_pet_asset_ids(config[n].get("person_id") or n, DATA_DIR) for n in all_pet_names}
     all_ref_ids: set[str] = {rid for ids in ref_ids_per_pet.values() for rid in ids}
     neg_ids = set(data.load_negative_ids(DATA_DIR))
     skipped_ids = set(data.load_skipped_ids(DATA_DIR))
@@ -577,8 +529,8 @@ async def get_neg_candidates(limit: int = 60):
                     v = np.asarray(vec, dtype=np.float64).reshape(1, -1)
                     probs = clf.predict_proba(scaler.transform(v))[0]
                     pet_prob = (1.0 - float(probs[unknown_idx])) if unknown_idx >= 0 else 0.0
-                    # Skip photos the classifier thinks are pets. Those belong in refs, not negatives.
-                    if pet_prob < THRESHOLD:
+                    # Skip photos the classifier is very confident about either way.
+                    if 0.05 <= pet_prob < THRESHOLD:
                         scored.append((pet_prob, a))
             scored.sort(key=lambda x: x[0], reverse=True)
             return scored[:limit]
@@ -627,8 +579,6 @@ async def import_pet(body: PetImport):
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Name cannot be empty")
-    if any(c in name for c in r'/\.'):
-        raise HTTPException(status_code=400, detail="Pet name cannot contain /, \\, or .")
     config = data.load_config(DATA_DIR)
     if name.lower() in {k.lower() for k in config}:
         raise HTTPException(status_code=409, detail=f"Pet '{name}' already exists")
@@ -661,8 +611,8 @@ async def import_pet(body: PetImport):
     n = min(len(candidates), 20)
     assets = [{"asset_id": candidates[int(i * len(candidates) / n)], "face_id": None} for i in range(n)]
 
-    (PETS_DIR / name).mkdir(parents=True, exist_ok=True)
-    data.save_pet_refs(name, assets, DATA_DIR)
+    (PETS_DIR / body.person_id).mkdir(parents=True, exist_ok=True)
+    data.save_pet_refs(body.person_id, assets, DATA_DIR)
     config[name] = {"person_id": body.person_id, "description": body.description, "since": body.since, "until": body.until}
     data.save_config(config, DATA_DIR)
     log.info(f"Imported pet '{name}' from person_id={body.person_id} with {len(assets)} refs")
@@ -730,9 +680,12 @@ async def get_scan_result():
 async def get_scan_low_confidence():
     from poller import THRESHOLD
     config = data.load_config(DATA_DIR)
+    skipped = set(data.load_skipped_ids(DATA_DIR))
     seen: dict = {}
     for a in (state.scan_low_conf_assets or []):
         aid = a["asset_id"]
+        if aid in skipped:
+            continue
         if aid not in seen or a["prob"] > seen[aid]["prob"]:
             seen[aid] = a
     sorted_assets = sorted(seen.values(), key=lambda a: a["prob"])

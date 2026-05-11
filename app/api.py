@@ -18,7 +18,7 @@ from pydantic import BaseModel
 import data
 import immich as imm
 import state
-from poller import embed_asset
+from embedder import embed_asset
 
 log = logging.getLogger("api")
 
@@ -334,7 +334,7 @@ async def remove_pet_asset(name: str, asset_id: str):
 
 @router.get("/pets/{name}/suggestions")
 async def get_suggestions(name: str, limit: int = 20):
-    from poller import build_classifier
+    from classifier import build_classifier
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
@@ -403,7 +403,7 @@ async def get_suggestions(name: str, limit: int = 20):
 
 @router.get("/pets/{name}/borderline")
 async def get_borderline(name: str, limit: int = 40):
-    from poller import build_classifier
+    from classifier import build_classifier
     config = data.load_config(DATA_DIR)
     if name not in config:
         raise HTTPException(status_code=404, detail=f"Pet '{name}' not found")
@@ -480,7 +480,8 @@ async def get_borderline_progress(name: str):
 
 @router.get("/suggestions/negatives")
 async def get_neg_candidates(limit: int = 60):
-    from poller import build_classifier, THRESHOLD
+    from classifier import build_classifier
+    from poller import THRESHOLD
     config = data.load_config(DATA_DIR)
 
     all_pet_names = list(config.keys())

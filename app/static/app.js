@@ -33,9 +33,6 @@ async function loadPets(keepActive = false) {
     pets = d.pets;
     if (activePet) {
       activePet = pets.find(p => p.name === activePet.name) || activePet;
-      const hasRefs = activePet.ref_count > 0;
-      const bb = document.getElementById('borderlineBtn');
-      if (bb) { bb.disabled = !hasRefs; bb.title = hasRefs ? '' : 'Add refs first'; }
     }
     renderSidebar();
     updateNegStatus();
@@ -68,7 +65,7 @@ function renderSidebar() {
 
 function clearSearch() {
   document.getElementById('resultsLabel').textContent = '';
-  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">Find photos</div><div class="empty-sub">Click Similar to find photos matching this pet</div></div>';
+  document.getElementById('photoGrid').innerHTML = '<div class="empty" style="grid-column:1/-1; height:300px;"><div class="empty-icon">🐾</div><div class="empty-title">Find photos</div><div class="empty-sub">Click "Find references" to get started</div></div>';
   selectedIds.clear(); lastClickedId = null; updateSelUI();
 }
 
@@ -84,10 +81,6 @@ async function selectPet(name) {
   document.getElementById('refsTitle').textContent = name;
   document.getElementById('suggestSection').style.display = '';
   document.getElementById('clearRefsBtn').style.display = '';
-  const hasRefs = activePet && activePet.ref_count > 0;
-  const bb = document.getElementById('borderlineBtn');
-  bb.disabled = !hasRefs;
-  bb.title = hasRefs ? '' : 'Add refs first';
   await loadRefs(name);
   await loadNegatives();
 }
@@ -141,6 +134,12 @@ async function assignSelected() {
 // Ref suggestions
 // ---------------------------------------------------------------------------
 
+function viewFindRefs() {
+  if (!activePet) return;
+  if (activePet.ref_count > 0) viewBorderline();
+  else viewSuggestions();
+}
+
 async function viewSuggestions() {
   if (!activePet) return;
   if (!activePet.description) { toast('Edit this pet and add a description to use this feature', 'error'); return; }
@@ -148,7 +147,7 @@ async function viewSuggestions() {
   const grid = document.getElementById('photoGrid');
   const label = document.getElementById('resultsLabel');
   grid.innerHTML = '<div class="loading" style="grid-column:1/-1">Finding similar photos… this may take a moment</div>';
-  label.textContent = 'Finding similar photos…';
+  label.textContent = 'Finding references…';
   try {
     const d = await api(`/api/pets/${encodeURIComponent(activePet.name)}/suggestions`);
     label.textContent = `${d.assets.length} photo${d.assets.length !== 1 ? 's' : ''} similar to ${activePet.name}'s refs`;
@@ -184,7 +183,7 @@ async function viewBorderline() {
   const label = document.getElementById('resultsLabel');
   const petName = activePet.name;
   grid.innerHTML = '<div class="loading" id="blLoadMsg" style="grid-column:1/-1">Loading…</div>';
-  label.textContent = 'Finding missed photos…';
+  label.textContent = 'Finding references…';
 
   blPollTimer = setInterval(async () => {
     if (blGeneration !== myGen) { clearInterval(blPollTimer); blPollTimer = null; return; }

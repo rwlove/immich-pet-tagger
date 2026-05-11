@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.0.0
+
+### Performance
+- **Batch GPU inference**: CLIP workers dequeue requests from all scan threads and process them as batches, keeping the GPU fully utilised. Scans are significantly faster on large libraries.
+- **Concurrent thumbnail fetching**: assets are fetched in parallel with a configurable thread pool (`SCAN_WORKERS`, auto-derived as `GPU_WORKERS × 32`).
+- **YOLO runs on CUDA**: the YOLO detector now loads onto the GPU when available.
+
+### Features
+- **AMD/ROCm support**: Docker image supports NVIDIA (default), AMD/ROCm, and CPU-only via a build arg.
+- **In-UI getting started guide**: the main panel shows a 6-step workflow on first open. The `i` button in the sidebar header brings it back at any time.
+- **Pet folder keys use person ID**: pet data folders are keyed by Immich person UUID instead of name, avoiding issues with special characters.
+
+---
+
 ## v0.4.0
 
 ### Features

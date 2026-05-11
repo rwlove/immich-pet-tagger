@@ -144,6 +144,8 @@ By default the poller only processes photos taken after the container first star
 | `IMMICH_EXTERNAL_URL` | `http://localhost:2283` | Immich URL as seen from your browser, used for links |
 | `IMMICH_API_KEY` | required | Immich API key |
 | `POLL_INTERVAL` | `300` | Seconds between scans |
+| `SCAN_WORKERS` | `GPU_WORKERS × 32` | Concurrent thumbnail fetches. Auto-derived to keep GPU batches full. Override only if Immich feels slow during scans. |
+| `GPU_WORKERS` | `2` | Parallel YOLO and CLIP inference threads. `2` is optimal for most GPUs; more threads shrink batch sizes and hurt throughput. |
 | `THRESHOLD` | `0.8` | Min confidence (0–1) to tag a photo |
 | `DRY_RUN` | `false` | Classify but do not write to Immich |
 | `CLIP_MODEL` | `ViT-B-16` | CLIP model name (matches Immich default) |
@@ -153,9 +155,23 @@ By default the poller only processes photos taken after the container first star
 
 ## GPU support
 
-The default `docker-compose.yml` is configured for NVIDIA GPUs. If you don't have one, remove the `deploy` section and change `CUDA: "true"` to `"false"` in the build args, then rebuild.
+All three configurations run the same code. GPU is faster but not required.
 
-If you do have an NVIDIA GPU, make sure the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) is installed and Docker is using the WSL2 backend (Windows) or the native toolkit (Linux).
+**NVIDIA (default)**
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). Keep the default `docker-compose.yml` as-is.
+
+**AMD (ROCm)**
+Requires ROCm drivers on the host. In `docker-compose.yml`:
+- Change `CUDA: "true"` to `ROCM: "true"` under `build.args`
+- Change `driver: nvidia` to `driver: amdgpu` under `deploy`
+- Rebuild: `docker compose build`
+
+**CPU-only (no GPU)**
+Works out of the box, just slower (~10x). In `docker-compose.yml`:
+- Remove or comment out the `CUDA: "true"` build arg
+- Remove the entire `deploy` section
+- `SCAN_WORKERS` auto-adjusts to 8 (no need to set it manually)
+- Rebuild: `docker compose build`
 
 ## Limitations
 

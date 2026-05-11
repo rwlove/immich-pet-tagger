@@ -1,11 +1,21 @@
-"""Animal detector using YOLOv8n. Lazy-loads on first call."""
+"""Animal detector using YOLOv8n. Batched inference via queue, N parallel worker threads.
+Pre-processing (PIL→tensor) happens in caller threads; batch threads only run the GPU kernel."""
 
 import logging
+import os
+import queue
+import threading
+
+import numpy as np
+import torch
 from PIL import Image
 
 log = logging.getLogger("detector")
 
-# COCO class IDs (0-indexed) for animals
+YOLO_BATCH_SIZE = int(os.environ.get("YOLO_BATCH_SIZE", 32))
+YOLO_WORKERS = int(os.environ.get("GPU_WORKERS", 2))
+YOLO_INPUT_SIZE = int(os.environ.get("YOLO_INPUT_SIZE", 320))
+
 ANIMAL_CLASS_IDS = {
     14,  # bird
     15,  # cat
@@ -19,33 +29,87 @@ ANIMAL_CLASS_IDS = {
     23,  # giraffe
 }
 
-_yolo = None
+
+class _YoloReq:
+    __slots__ = ("tensor", "event", "result")
+    def __init__(self, tensor: torch.Tensor):
+        self.tensor = tensor
+        self.event = threading.Event()
+        self.result: list | None = None
 
 
-def get_yolo():
-    global _yolo
-    if _yolo is None:
-        import torch
-        from ultralytics import YOLO
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        log.info(f"Loading YOLOv8n model on {device}...")
-        _yolo = YOLO("yolov8n.pt")
-        _yolo.to(device)
-        log.info(f"YOLO loaded on {device}")
-    return _yolo
+_yolo_queue: queue.Queue[_YoloReq] = queue.Queue()
+_yolo_worker_threads: list[threading.Thread] = []
+_yolo_worker_lock = threading.Lock()
+
+yolo_batch_total = 0
+yolo_batch_count = 0
+_yolo_stats_lock = threading.Lock()
+
+
+def _yolo_batch_loop(worker_id: int) -> None:
+    global yolo_batch_total, yolo_batch_count
+    from ultralytics import YOLO
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    log.info(f"YOLO worker {worker_id} loading on {device}...")
+    model = YOLO("yolov8n.pt")
+    model.to(device)
+    log.info(f"YOLO worker {worker_id} ready")
+
+    while True:
+        first = _yolo_queue.get()
+        batch = [first]
+        try:
+            while len(batch) < YOLO_BATCH_SIZE:
+                batch.append(_yolo_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        with _yolo_stats_lock:
+            yolo_batch_total += len(batch)
+            yolo_batch_count += 1
+
+        try:
+            # Tensors are already preprocessed by caller threads: B×C×H×W, float32, [0,1], RGB.
+            # Ultralytics skips PIL/numpy conversion when given a tensor directly.
+            stacked = torch.stack([req.tensor for req in batch])
+            results_list = model(stacked, verbose=False, imgsz=YOLO_INPUT_SIZE)
+            for req, result in zip(batch, results_list):
+                boxes = []
+                for box in result.boxes:
+                    cls = int(box.cls[0])
+                    if cls not in ANIMAL_CLASS_IDS:
+                        continue
+                    conf = float(box.conf[0])
+                    x1, y1, x2, y2 = box.xyxyn[0].tolist()
+                    boxes.append((conf, x1, y1, x2, y2))
+                boxes.sort(reverse=True)
+                req.result = [(x1, y1, x2, y2) for _, x1, y1, x2, y2 in boxes]
+                req.event.set()
+        except Exception as e:
+            log.warning(f"YOLO worker {worker_id} batch error: {e}")
+            for req in batch:
+                req.result = []
+                req.event.set()
+
+
+def _ensure_yolo_workers() -> None:
+    with _yolo_worker_lock:
+        alive = [t for t in _yolo_worker_threads if t.is_alive()]
+        for i in range(len(alive), YOLO_WORKERS):
+            t = threading.Thread(target=_yolo_batch_loop, args=(i,), daemon=True, name=f"yolo-batch-{i}")
+            t.start()
+            _yolo_worker_threads.append(t)
 
 
 def detect_animals(img: Image.Image) -> list[tuple[float, float, float, float]]:
     """Returns (x1, y1, x2, y2) normalized bboxes for detected animals, sorted by confidence."""
-    model = get_yolo()
-    results = model(img, verbose=False)[0]
-    boxes = []
-    for box in results.boxes:
-        cls = int(box.cls[0])
-        if cls not in ANIMAL_CLASS_IDS:
-            continue
-        conf = float(box.conf[0])
-        x1, y1, x2, y2 = box.xyxyn[0].tolist()
-        boxes.append((conf, x1, y1, x2, y2))
-    boxes.sort(reverse=True)
-    return [(x1, y1, x2, y2) for _, x1, y1, x2, y2 in boxes]
+    _ensure_yolo_workers()
+    # Pre-process in caller's thread (parallel across all scan workers).
+    small = img.resize((YOLO_INPUT_SIZE, YOLO_INPUT_SIZE), Image.BILINEAR)
+    arr = np.array(small, dtype=np.float32) / 255.0  # H×W×3, RGB, [0,1]
+    tensor = torch.from_numpy(arr.transpose(2, 0, 1))  # C×H×W
+    req = _YoloReq(tensor)
+    _yolo_queue.put(req)
+    req.event.wait()
+    return req.result

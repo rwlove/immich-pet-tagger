@@ -4,6 +4,7 @@ No DB access. Embeddings computed from thumbnails via the Immich HTTP API."""
 import logging
 import os
 import pickle
+import queue
 import random
 import threading
 import time
@@ -27,30 +28,106 @@ log = logging.getLogger("poller")
 
 THRESHOLD = float(os.environ.get("THRESHOLD", 0.8))
 DRY_RUN = os.environ.get("DRY_RUN", "").lower() in ("1", "true", "yes")
-SCAN_WORKERS = int(os.environ.get("SCAN_WORKERS", 8))
+GPU_WORKERS = int(os.environ.get("GPU_WORKERS", 2))
+# On CPU, inference is slow enough that 8 fetchers saturate the queue.
+# On GPU, each worker spends ~65% of its time blocked in the GPU queue, so we need
+# enough workers to keep batch sizes high: GPU_WORKERS * 32 fills ~16-image batches.
+_default_scan_workers = GPU_WORKERS * 32 if torch.cuda.is_available() else 8
+SCAN_WORKERS = int(os.environ.get("SCAN_WORKERS", _default_scan_workers))
+CLIP_BATCH_SIZE = int(os.environ.get("CLIP_BATCH_SIZE", 32))
 
-_gpu_lock = threading.Lock()
 _count_lock = threading.Lock()
 
 CLIP_MODEL_NAME = os.environ.get("CLIP_MODEL", "ViT-B-16")
 CLIP_PRETRAINED = os.environ.get("CLIP_PRETRAINED", "openai")
 
-_clip_model = None
-_clip_preprocess = None
-_clip_device = None
 _embed_cache: dict[str, np.ndarray] = {}
 _cache_path: Path | None = None
 
+# ---------------------------------------------------------------------------
+# CLIP batch workers
+# ---------------------------------------------------------------------------
 
-def get_clip():
-    global _clip_model, _clip_preprocess, _clip_device
-    if _clip_model is None:
-        log.info(f"Loading CLIP model {CLIP_MODEL_NAME} ({CLIP_PRETRAINED})...")
-        _clip_device = "cuda" if torch.cuda.is_available() else "cpu"
-        _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(CLIP_MODEL_NAME, pretrained=CLIP_PRETRAINED)
-        _clip_model.eval().to(_clip_device)
-        log.info(f"CLIP loaded on {_clip_device}")
-    return _clip_model, _clip_preprocess, _clip_device
+# Preprocess transform shared across worker threads (set by first CLIP worker).
+# Worker threads do CPU preprocessing; batch threads only stack + run GPU.
+_clip_preprocess_fn = None
+_clip_preprocess_ready = threading.Event()
+
+
+class _EmbedReq:
+    __slots__ = ("tensor", "event", "result")
+    def __init__(self, tensor: torch.Tensor):
+        self.tensor = tensor
+        self.event = threading.Event()
+        self.result: np.ndarray | None = None
+
+_embed_queue: queue.Queue[_EmbedReq] = queue.Queue()
+_clip_worker_threads: list[threading.Thread] = []
+_clip_worker_lock = threading.Lock()
+
+# batch stats (reset each poll cycle)
+_clip_batch_total = 0
+_clip_batch_count = 0
+_stats_lock = threading.Lock()
+
+
+def _clip_batch_loop(worker_id: int) -> None:
+    global _clip_batch_total, _clip_batch_count, _clip_preprocess_fn
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    log.info(f"CLIP worker {worker_id} loading on {device}...")
+    model, preprocess, _ = open_clip.create_model_and_transforms(CLIP_MODEL_NAME, pretrained=CLIP_PRETRAINED)
+    model.eval().to(device)
+    if not _clip_preprocess_ready.is_set():
+        _clip_preprocess_fn = preprocess
+        _clip_preprocess_ready.set()
+    stream = torch.cuda.Stream() if device == "cuda" else None
+    log.info(f"CLIP worker {worker_id} ready")
+
+    while True:
+        first = _embed_queue.get()
+        batch = [first]
+        try:
+            while len(batch) < CLIP_BATCH_SIZE:
+                batch.append(_embed_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        with _stats_lock:
+            _clip_batch_total += len(batch)
+            _clip_batch_count += 1
+
+        try:
+            # tensors are already preprocessed by worker threads
+            stacked = torch.stack([req.tensor for req in batch])
+            if stream is not None:
+                with torch.cuda.stream(stream):
+                    tensors = stacked.to(device, non_blocking=True)
+                    with torch.no_grad():
+                        feats = model.encode_image(tensors)
+                        feats = feats / feats.norm(dim=-1, keepdim=True)
+                stream.synchronize()
+                vecs = feats.cpu().numpy()
+            else:
+                with torch.no_grad():
+                    feats = model.encode_image(stacked.to(device))
+                    feats = feats / feats.norm(dim=-1, keepdim=True)
+                vecs = feats.cpu().numpy()
+        except Exception as e:
+            log.warning(f"CLIP worker {worker_id} batch error: {e}")
+            vecs = [None] * len(batch)
+
+        for req, vec in zip(batch, vecs):
+            req.result = vec
+            req.event.set()
+
+
+def _ensure_clip_workers() -> None:
+    with _clip_worker_lock:
+        alive = [t for t in _clip_worker_threads if t.is_alive()]
+        for i in range(len(alive), GPU_WORKERS):
+            t = threading.Thread(target=_clip_batch_loop, args=(i,), daemon=True, name=f"clip-batch-{i}")
+            t.start()
+            _clip_worker_threads.append(t)
 
 
 # ---------------------------------------------------------------------------
@@ -99,16 +176,13 @@ def fetch_thumbnail(asset_id: str) -> Image.Image | None:
 
 
 def embed_image(img: Image.Image) -> np.ndarray | None:
-    model, preprocess, device = get_clip()
-    try:
-        tensor = preprocess(img).unsqueeze(0).to(device)
-        with torch.no_grad():
-            feat = model.encode_image(tensor)
-            feat = feat / feat.norm(dim=-1, keepdim=True)
-        return feat.cpu().numpy()[0]
-    except Exception as e:
-        log.warning(f"embed_image error: {e}")
-        return None
+    _ensure_clip_workers()
+    _clip_preprocess_ready.wait()  # blocks only until first CLIP worker is up
+    tensor = _clip_preprocess_fn(img)  # CPU preprocessing in caller's thread
+    req = _EmbedReq(tensor)
+    _embed_queue.put(req)
+    req.event.wait()
+    return req.result
 
 
 def crop_animals(img: Image.Image) -> list[tuple[tuple, Image.Image]]:
@@ -349,16 +423,14 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
             with _count_lock:
                 counts["no_thumb"] += 1
             return
+        crops = crop_animals(img)
+        if not crops:
+            crops = [(None, img)]
+        elif len(crops) > 1:
+            log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
+        vecs = [(bbox_norm, embed_image(crop)) for bbox_norm, crop in crops]
 
-        with _gpu_lock:
-            crops = crop_animals(img)
-            if not crops:
-                crops = [(None, img)]
-            elif len(crops) > 1:
-                log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
-            vecs = [(bbox_norm, embed_image(crop)) for bbox_norm, crop in crops]
-
-        existing_persons = imm.fetch_asset_face_person_ids(aid)
+        existing_persons: set | None = None
         tagged_in_photo: set[str] = set()
 
         for bbox_norm, vec in vecs:
@@ -390,7 +462,15 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
                 log.warning(f"Pet '{pet_name}' has no person_id in config.")
                 continue
 
-            if person_id in existing_persons or person_id in tagged_in_photo:
+            if person_id in tagged_in_photo:
+                with _count_lock:
+                    counts["already_tagged"] += 1
+                continue
+
+            if existing_persons is None:
+                existing_persons = imm.fetch_asset_face_person_ids(aid)
+
+            if person_id in existing_persons:
                 with _count_lock:
                     counts["already_tagged"] += 1
                 continue
@@ -411,7 +491,15 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
                     else:
                         counts["failed"] += 1
 
+    import detector as _det
+    with _stats_lock:
+        global _clip_batch_total, _clip_batch_count
+        _clip_batch_total = _clip_batch_count = 0
+    with _det._yolo_stats_lock:
+        _det.yolo_batch_total = _det.yolo_batch_count = 0
+
     log.info(f"Processing {len(assets)} assets with {SCAN_WORKERS} workers")
+    t0 = time.time()
     with ThreadPoolExecutor(max_workers=SCAN_WORKERS) as executor:
         futures = {executor.submit(process_asset, aid, ts): aid for aid, ts in assets}
         for future in as_completed(futures):
@@ -424,7 +512,17 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
             except Exception as e:
                 log.warning(f"Asset {futures[future]} failed: {e}")
 
-    log.info(f"Summary: {counts}")
+    elapsed = time.time() - t0
+    with _stats_lock:
+        clip_avg = _clip_batch_total / _clip_batch_count if _clip_batch_count else 0
+    with _det._yolo_stats_lock:
+        yolo_avg = _det.yolo_batch_total / _det.yolo_batch_count if _det.yolo_batch_count else 0
+    log.info(
+        f"STATS | assets={len(assets)} elapsed={elapsed:.1f}s "
+        f"throughput={len(assets)/elapsed:.1f}/s "
+        f"yolo_batch={yolo_avg:.1f} clip_batch={clip_avg:.1f} "
+        f"counts={counts}"
+    )
 
     if not DRY_RUN:
         data.save_last_timestamp(latest_ts, dd)

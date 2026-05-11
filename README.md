@@ -25,7 +25,7 @@ Uses CLIP embeddings and a few reference photos you provide. No cloud services, 
 
 ## Requirements
 
-- Immich running via Docker Compose
+- Immich running via Docker Compose (tested with v2.7.5)
 - Docker on the same host
 - An Immich API key with the following permissions:
 
@@ -134,9 +134,9 @@ These help the classifier reject photos that look similar to your pet but aren't
 
 ### Step 4: Run a test scan
 
-Start with a short date window to validate accuracy before processing your whole library.
+Start with a recent date to keep scans short and fast during iteration — the fewer photos, the quicker you can review and refine.
 
-1. In the **Scan from** panel at the bottom of the sidebar, set a date a few months back
+1. In the **Scan from** panel at the bottom of the sidebar, set a date 1–2 weeks back
 2. Click **Scan** and wait for the results
 3. If **Review N low confidence** appears in the results, click it — these are borderline cases the classifier wasn't sure about
 4. Go through them: add correctly identified ones as references, mark wrong ones as **Not my pets**, and skip the rest

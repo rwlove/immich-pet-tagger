@@ -427,7 +427,8 @@ async def get_borderline(name: str, limit: int = 40):
     ref_ids_per_pet = {n: all_ref_ids[n] for n in pet_names}
     negative_ids = data.load_negative_ids(DATA_DIR)
 
-    LOW, HIGH = 0.3, 0.85
+    from poller import THRESHOLD
+    LOW, HIGH = 0.3, THRESHOLD
 
     state.borderline_request_id += 1
     my_id = state.borderline_request_id

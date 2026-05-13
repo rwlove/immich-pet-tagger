@@ -1,5 +1,6 @@
 services:
   immich-pet-tagger:
+    image: ghcr.io/tedornitier/immich-pet-tagger:latest
     build:
       context: .
       args:
@@ -26,7 +27,6 @@ services:
               capabilities: [gpu]
     volumes:
       - ./data:/data
-      - ./app:/app
     networks:
       - immich_default  # ← must match the network name below
 

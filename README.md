@@ -99,13 +99,7 @@ docker compose pull
 docker compose up -d
 ```
 
-AMD/ROCm and CPU-only users should pull the latest code (`git pull`) and rebuild instead:
-
-```bash
-git pull
-docker compose build
-docker compose up -d
-```
+This works for all variants since pre-built images are published for NVIDIA, AMD, and CPU-only.
 
 ---
 
@@ -192,12 +186,24 @@ After that, the background poller runs every 5 minutes and tags new photos autom
 
 ## GPU support
 
-A GPU makes scans significantly faster but is not required. The default setup assumes an NVIDIA GPU.
+A GPU makes scans significantly faster but is not required. Pre-built images are published for all three variants.
 
-**No NVIDIA GPU?** Edit `docker-compose.yml` before starting:
+**NVIDIA (default):** no changes needed, uses the `latest` image.
 
-- **AMD GPU:** change `CUDA: "true"` to `ROCM: "true"` and `driver: nvidia` to `driver: amdgpu`, then run `docker compose build && docker compose up -d`
-- **No GPU (CPU-only):** remove the `CUDA: "true"` line and the entire `deploy` section, then run `docker compose build && docker compose up -d`
+**AMD GPU:** in `docker-compose.yml`, change the image tag and the deploy driver:
+```yaml
+image: ghcr.io/tedornitier/immich-pet-tagger:rocm
+# under build.args:
+  ROCM: "true"
+# under deploy.resources.reservations.devices:
+  driver: amdgpu
+```
+
+**No GPU (CPU-only):** in `docker-compose.yml`, change the image tag and remove the deploy section:
+```yaml
+image: ghcr.io/tedornitier/immich-pet-tagger:cpu
+# remove the entire deploy: section
+```
 
 CPU-only works fine for small libraries or infrequent scans. Expect roughly 10x slower processing.
 

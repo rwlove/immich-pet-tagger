@@ -51,6 +51,16 @@ class PetAssets(BaseModel):
     asset_ids: list[str]
 
 
+_VERSION_FILE = Path(__file__).parent / "VERSION"
+
+@router.get("/version")
+async def get_version():
+    try:
+        return {"version": _VERSION_FILE.read_text().strip()}
+    except FileNotFoundError:
+        return {"version": "unknown"}
+
+
 @router.get("/config")
 async def get_config():
     return {"immich_external_url": IMMICH_EXTERNAL_URL}

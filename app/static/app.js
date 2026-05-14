@@ -786,4 +786,26 @@ document.getElementById('importDetailModal').addEventListener('click', function(
   await refreshState();
   loadTimestamp();
   loadScanResult();
+  api('/api/version').then(async d => {
+    const el = document.getElementById('versionLabel');
+    if (!el) return;
+    const current = d.version;
+    el.textContent = current;
+    try {
+      const CACHE_KEY = 'pet_tagger_latest_version';
+      const CACHE_TTL = 3600 * 1000;
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      let latest = cached && (Date.now() - cached.ts < CACHE_TTL) ? cached.version : null;
+      if (!latest) {
+        const r = await fetch('https://api.github.com/repos/tedornitier/immich-pet-tagger/releases/latest');
+        if (r.ok) {
+          latest = (await r.json()).tag_name;
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ version: latest, ts: Date.now() }));
+        }
+      }
+      if (latest && latest !== current) {
+        el.innerHTML = `${current} <a href="https://github.com/tedornitier/immich-pet-tagger/releases/latest" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-weight:600;" title="Update available: ${latest}">↑ update</a>`;
+      }
+    } catch(_) {}
+  }).catch(() => {});
 })();

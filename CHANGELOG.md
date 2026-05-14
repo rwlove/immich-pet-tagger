@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.2.0
+
+### Features
+- **Version indicator**: the header now shows the current version and notifies you when a new release is available.
+- **Persistent model cache**: the YOLO and CLIP models are cached in a named Docker volume, so they survive container updates without re-downloading.
+
+### Fixes
+- **CPU-only default**: `docker-compose.yml` now defaults to the `:cpu` image with GPU acceleration as an opt-in. Uncomment the `deploy` block and switch to the `:latest` image to enable NVIDIA GPU.
+- **UI bound to localhost**: the UI now binds to `127.0.0.1` by default, preventing unauthenticated access from other devices on the network.
+- **Low confidence count**: the "Review N low confidence" count in scan results now matches the number of photos actually shown in the review panel.
+- **Not my pets count**: the label now always shows a plain number instead of extra status text.
+- **UI font alignment**: minor font consistency fix.
+
+---
+
 ## v1.1.0
 
 ### Fixes

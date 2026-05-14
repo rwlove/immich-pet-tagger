@@ -1,4 +1,4 @@
-let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', negCandidateMode = false, borderlineMode = false, scanLowConfMode = false, lastClickedId = null, lastNegTopScore = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
+let pets = [], activePet = null, selectedIds = new Set(), refsIds = [], negIds = [], immichUrl = 'http://localhost:2283', negCandidateMode = false, borderlineMode = false, scanLowConfMode = false, lastClickedId = null, negGeneration = 0, negPollTimer = null, blGeneration = 0, blPollTimer = null;
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts, body: opts.body ? JSON.stringify(opts.body) : undefined });
@@ -296,23 +296,8 @@ async function skipSelected() {
 
 function updateNegStatus() {
   const el = document.getElementById('negCount');
-  const count = negIds.length;
-  if (lastNegTopScore === null) {
-    el.textContent = count;
-    el.style.color = '';
-    return;
-  }
-  const pct = Math.round(lastNegTopScore * 100);
-  if (lastNegTopScore >= 0.1) {
-    el.textContent = `${count} · top ${pct}%, add more`;
-    el.style.color = 'var(--danger)';
-  } else if (lastNegTopScore >= 0.05) {
-    el.textContent = `${count} · top ${pct}%`;
-    el.style.color = 'var(--text2)';
-  } else {
-    el.textContent = `${count} · calibrated`;
-    el.style.color = 'var(--success)';
-  }
+  el.textContent = negIds.length;
+  el.style.color = '';
 }
 
 async function loadNegatives() {
@@ -339,7 +324,7 @@ async function addSelectedAsNegatives() {
     await api('/api/negatives', { method: 'POST', body: { asset_ids: [...selectedIds] } });
     negIds = [...new Set([...negIds, ...selectedIds])];
     document.querySelectorAll('.photo-thumb.selected').forEach(el => { el.classList.remove('selected'); el.classList.add('is-neg'); });
-    selectedIds.clear(); lastNegTopScore = null; updateSelUI();
+    selectedIds.clear(); updateSelUI();
     await loadNegatives();
     toast('Added to "not my pets"', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
@@ -370,7 +355,6 @@ async function viewNegCandidates() {
     const d = await api('/api/suggestions/negatives');
     clearInterval(negPollTimer); negPollTimer = null;
     if (negGeneration !== myGen) return;
-    lastNegTopScore = d.assets.length > 0 ? (d.assets[0].score ?? null) : 0;
     updateNegStatus();
     label.textContent = `${d.assets.length} candidate${d.assets.length !== 1 ? 's' : ''} for "not my pets"`;
     if (!d.assets.length) {
@@ -417,7 +401,7 @@ async function clearAllNegatives() {
   if (!confirm(`Remove all "not my pets" photos from Pet Tagger? This will not affect Immich.`)) return;
   try {
     await api('/api/negatives/all', { method: 'DELETE' });
-    negIds = []; lastNegTopScore = null;
+    negIds = [];
     await loadNegatives();
     toast('All "not my pets" cleared', 'success');
   } catch(e) { toast('Error: ' + e.message, 'error'); }
@@ -786,4 +770,26 @@ document.getElementById('importDetailModal').addEventListener('click', function(
   await refreshState();
   loadTimestamp();
   loadScanResult();
+  api('/api/version').then(async d => {
+    const el = document.getElementById('versionLabel');
+    if (!el) return;
+    const current = d.version;
+    el.textContent = current;
+    try {
+      const CACHE_KEY = 'pet_tagger_latest_version';
+      const CACHE_TTL = 3600 * 1000;
+      const cached = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+      let latest = cached && (Date.now() - cached.ts < CACHE_TTL) ? cached.version : null;
+      if (!latest) {
+        const r = await fetch('https://api.github.com/repos/tedornitier/immich-pet-tagger/releases/latest');
+        if (r.ok) {
+          latest = (await r.json()).tag_name;
+          localStorage.setItem(CACHE_KEY, JSON.stringify({ version: latest, ts: Date.now() }));
+        }
+      }
+      if (latest && latest !== current) {
+        el.innerHTML = `${current} <a href="https://github.com/tedornitier/immich-pet-tagger/releases/latest" target="_blank" rel="noopener" style="color:var(--accent);text-decoration:none;font-weight:600;" title="Update available: ${latest}">↑ update</a>`;
+      }
+    } catch(_) {}
+  }).catch(() => {});
 })();

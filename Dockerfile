@@ -30,6 +30,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir --force-reinstall opencv-python-headless
 
+COPY VERSION .
 COPY app/ .
 
 # /data is the mounted volume: pets/luna/, pets/config.json, state files, logs

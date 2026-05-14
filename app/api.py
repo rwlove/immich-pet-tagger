@@ -675,7 +675,13 @@ async def _run_manual_scan(generation: int):
 
 @router.get("/scan/result")
 async def get_scan_result():
-    return state.manual_scan_result or {"status": "none"}
+    result = state.manual_scan_result
+    if not result:
+        return {"status": "none"}
+    skipped = set(data.load_skipped_ids(DATA_DIR))
+    filtered_count = len({a["asset_id"] for a in (state.scan_low_conf_assets or []) if a["asset_id"] not in skipped})
+    counts = {**result.get("counts", {}), "low_confidence": filtered_count}
+    return {**result, "counts": counts}
 
 
 @router.get("/scan/low-confidence")

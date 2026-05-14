@@ -67,14 +67,14 @@ environment:
 
 ### 4. Start the container
 
-**NVIDIA GPU (default):** the pre-built image is pulled automatically from GHCR.
+The default configuration runs on CPU, which works for any machine without extra setup.
 
 ```bash
 docker compose up -d
 docker compose logs -f   # watch startup logs
 ```
 
-**AMD (ROCm) or CPU-only:** change the image tag first (see [GPU support](#gpu-support)), then run the same commands above.
+If you want GPU acceleration, see [GPU support](#gpu-support) before running.
 
 On first start, the YOLO model (~6 MB) and CLIP model (~350 MB) are downloaded and cached. Subsequent starts are fast.
 
@@ -187,11 +187,23 @@ After that, the background poller runs every 5 minutes and tags new photos autom
 
 ## GPU support
 
-A GPU makes scans significantly faster but is not required. Pre-built images are published for all three variants.
+The default setup runs on CPU and requires no extra configuration. A GPU makes scans significantly faster but requires additional setup. Pre-built images are published for all three variants.
 
-**NVIDIA (default):** no changes needed, uses the `latest` image.
+**CPU (default):** no changes needed.
 
-**AMD GPU:** in `docker-compose.yml`, set the image tag to `:rocm` and change the deploy driver to `amdgpu`:
+**NVIDIA GPU:** install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on your host, then in `docker-compose.yml`:
+1. Change the image tag to `:latest`
+2. Uncomment the `deploy:` section
+3. Set `GPU_WORKERS=2`
+
+```yaml
+image: ghcr.io/tedornitier/immich-pet-tagger:latest
+```
+
+**AMD GPU:** install ROCm drivers, then in `docker-compose.yml`:
+1. Change the image tag to `:rocm`
+2. Uncomment the `deploy:` section and change the driver to `amdgpu`
+
 ```yaml
 image: ghcr.io/tedornitier/immich-pet-tagger:rocm
 ```
@@ -199,12 +211,7 @@ image: ghcr.io/tedornitier/immich-pet-tagger:rocm
 driver: amdgpu
 ```
 
-**No GPU (CPU-only):** in `docker-compose.yml`, set the image tag to `:cpu` and remove the entire `deploy:` section:
-```yaml
-image: ghcr.io/tedornitier/immich-pet-tagger:cpu
-```
-
-CPU-only works fine for small libraries or infrequent scans. Expect roughly 10x slower processing.
+CPU-only works fine for most home libraries. Expect roughly 10x slower processing compared to GPU.
 
 ## Limitations
 

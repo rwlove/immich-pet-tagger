@@ -12,11 +12,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #   None:   leave both false (CPU-only, slow but works)
 ARG CUDA=false
 ARG ROCM=false
+# P40-compat fork: torch 2.7+cu128 dropped sm_61 (Pascal); stay on the
+# 2.6.x+cu124 line so this image runs on a P40. Revert to upstream pins
+# when this image no longer targets Pascal hardware.
 RUN if [ "$CUDA" = "true" ]; then \
       pip install --no-cache-dir \
-        torch==2.7.0+cu128 \
-        torchvision==0.22.0+cu128 \
-        --extra-index-url https://download.pytorch.org/whl/cu128; \
+        torch==2.6.0+cu124 \
+        torchvision==0.21.0+cu124 \
+        --extra-index-url https://download.pytorch.org/whl/cu124; \
     elif [ "$ROCM" = "true" ]; then \
       pip install --no-cache-dir \
         torch==2.7.0 \

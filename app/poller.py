@@ -56,7 +56,7 @@ def run_poll_cycle(data_dir: str, on_date=None, cancel=None, low_conf_out=None, 
     data.write_poll_status(dd, {"status": "running", "started_at": now})
 
     counts = live_counts if live_counts is not None else {}
-    for k in ("added", "low_confidence", "unknown", "out_of_range", "already_tagged", "failed", "no_thumb"):
+    for k in ("added", "low_confidence", "unknown", "out_of_range", "already_tagged", "failed", "no_thumb", "no_animal"):
         counts[k] = 0
     try:
         _run_poll_cycle(dd, counts, on_date, cancel, low_conf_out)
@@ -125,8 +125,13 @@ def _run_poll_cycle(dd: Path, counts: dict, on_date=None, cancel=None, low_conf_
             return
         crops = emb.crop_animals(img)
         if not crops:
-            crops = [(None, img)]
-        elif len(crops) > 1:
+            # Without a YOLO detection, the whole-image embedding lands in
+            # whichever pet cluster happens to be closest in CLIP space —
+            # almost always a false positive. Skip rather than tag.
+            with _count_lock:
+                counts["no_animal"] += 1
+            return
+        if len(crops) > 1:
             log.info(f"YOLO detected {len(crops)} animals in {aid} ({time_str[:10]})")
         vecs = [(bbox_norm, emb.embed_image(crop)) for bbox_norm, crop in crops]
 

@@ -37,8 +37,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # without internet access and the container can be deployed with a
 # read-only rootfs or a non-root user (ultralytics would otherwise try
 # to download the weights into the CWD at first inference).
-ADD https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.pt /app/yolov8n.pt
-RUN chmod 0644 /app/yolov8n.pt
+ADD https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8m.pt /app/yolov8m.pt
+RUN chmod 0644 /app/yolov8m.pt
 
 COPY VERSION .
 COPY app/ .

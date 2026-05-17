@@ -52,7 +52,7 @@ def _yolo_batch_loop(worker_id: int) -> None:
     from ultralytics import YOLO
     device = "cuda" if torch.cuda.is_available() else "cpu"
     log.info(f"YOLO worker {worker_id} loading on {device}...")
-    model = YOLO("yolov8n.pt")
+    model = YOLO("yolov8m.pt")
     model.to(device)
     log.info(f"YOLO worker {worker_id} ready")
 
